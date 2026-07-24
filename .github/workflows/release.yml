@@ -81,9 +81,23 @@ jobs:
           # Repackage the prebuilt x86_64 Linux binaries as a Homebrew bottle so
           # `brew install` POURS them (no build-from-source path, no C compiler
           # gate) — this is what lets it install on minimal / immutable boxes.
+          # A poured bottle is NOT run through the formula's `install`, so the
+          # keg must already contain everything install would produce: binaries,
+          # man pages, and shell completions. Build that full keg here (the musl
+          # binaries run fine on the runner to emit their own man/completions).
           keg="grove/${VERSION}"
-          rm -rf bottlestage && mkdir -p "bottlestage/${keg}/bin"
-          tar xzf art/grove-x86_64-unknown-linux-musl.tar.gz -C "bottlestage/${keg}/bin"
+          bin="bottlestage/${keg}/bin"
+          man="bottlestage/${keg}/share/man/man1"
+          zc="bottlestage/${keg}/share/zsh/site-functions"
+          bc="bottlestage/${keg}/share/bash-completion/completions"
+          fc="bottlestage/${keg}/share/fish/vendor_completions.d"
+          rm -rf bottlestage && mkdir -p "$bin" "$man" "$zc" "$bc" "$fc"
+          tar xzf art/grove-x86_64-unknown-linux-musl.tar.gz -C "$bin"
+          "$bin/grove" man > "$man/grove.1"
+          for c in gst ga gc gp gpp lg lgp lgpp lt; do "$bin/$c" --man > "$man/$c.1"; done
+          "$bin/grove" completions zsh  > "$zc/_grove"
+          "$bin/grove" completions bash > "$bc/grove"
+          "$bin/grove" completions fish > "$fc/grove.fish"
           ( cd bottlestage && tar czf "../art/grove-${VERSION}.x86_64_linux.bottle.tar.gz" grove )
           echo "BOTTLE_SHA=$(sha256sum "art/grove-${VERSION}.x86_64_linux.bottle.tar.gz" | awk '{print $1}')" >> "$GITHUB_ENV"
       - name: Publish release
