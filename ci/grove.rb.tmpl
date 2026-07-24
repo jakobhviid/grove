@@ -1,0 +1,53 @@
+class Grove < Formula
+  desc "Portable git shortcuts plus a multi-repo overview & sync, for any shell"
+  homepage "https://github.com/jakobhviid/grove"
+  version "@VERSION@"
+  license "MIT"
+
+  depends_on "git"
+
+  on_macos do
+    on_intel do
+      url "https://github.com/jakobhviid/grove/releases/download/v@VERSION@/grove-x86_64-apple-darwin.tar.gz"
+      sha256 "@MAC_X86_SHA@"
+    end
+    on_arm do
+      url "https://github.com/jakobhviid/grove/releases/download/v@VERSION@/grove-aarch64-apple-darwin.tar.gz"
+      sha256 "@MAC_ARM_SHA@"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "https://github.com/jakobhviid/grove/releases/download/v@VERSION@/grove-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "@X86_SHA@"
+    end
+    on_arm do
+      url "https://github.com/jakobhviid/grove/releases/download/v@VERSION@/grove-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "@ARM_SHA@"
+    end
+  end
+
+  def install
+    bin.install "grove"
+    generate_completions_from_executable(bin/"grove", "completions")
+    (man1/"grove.1").write Utils.safe_popen_read(bin/"grove", "man")
+  end
+
+  def caveats
+    <<~EOS
+      Enable the short aliases (gs, ga, gc, gcp, gp, gpp, lg, lgp, lt) by adding
+      one line to your shell rc:
+
+        zsh:   eval "$(grove init zsh)"
+        bash:  eval "$(grove init bash)"
+        fish:  grove init fish | source
+
+      The `lt` tree view uses Nerd Font icons — use a Nerd Font for best results.
+    EOS
+  end
+
+  test do
+    assert_match "grove", shell_output("#{bin}/grove --help")
+  end
+end
