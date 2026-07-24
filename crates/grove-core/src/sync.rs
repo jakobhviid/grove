@@ -46,5 +46,6 @@ pub fn run(dir: Option<&Path>) -> Result<()> {
         }
     }
 
-    overview::run(Some(dir))
+    // sync already fetched above — render without fetching again (no 2nd bar).
+    overview::run_no_fetch(Some(dir))
 }

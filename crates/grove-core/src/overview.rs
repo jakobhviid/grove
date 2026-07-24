@@ -16,6 +16,17 @@ struct Row {
 }
 
 pub fn run(dir: Option<&Path>) -> Result<()> {
+    run_inner(dir, true)
+}
+
+/// Like `run`, but assumes the caller already fetched (used by `sync`), so it
+/// skips the fetch and its progress bar and just renders current state — avoids
+/// a second fetch + second "Fetching" bar during `lgp`.
+pub fn run_no_fetch(dir: Option<&Path>) -> Result<()> {
+    run_inner(dir, false)
+}
+
+fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
@@ -26,31 +37,41 @@ pub fn run(dir: Option<&Path>) -> Result<()> {
         return Ok(());
     }
 
-    // Gather every repo's state in parallel (fetch happens inside, ssh only),
-    // with a progress bar — the fetches are the slow, network-bound part.
-    let pb = ui::bar(repos.len() as u64, "Fetching");
+    // Size the bar to the repos we'll actually fetch (ssh only — https are
+    // flagged, not fetched), so the count reflects real work: "Fetching 3/8".
+    let pb = if fetch {
+        let n = repos.iter().filter(|r| !git::is_https(&r.path)).count();
+        (n > 0).then(|| ui::bar(n as u64, "Fetching"))
+    } else {
+        None
+    };
+
     let rows: Vec<Row> = repos
         .par_iter()
         .map(|r| {
             let https = git::is_https(&r.path);
             let branch = git::branch(&r.path);
-            let row = if https {
-                Row { name: r.name.clone(), branch, https, ab: None, dirty: git::Dirty::default() }
-            } else {
+            if https {
+                return Row { name: r.name.clone(), branch, https, ab: None, dirty: git::Dirty::default() };
+            }
+            if fetch {
                 git::fetch(&r.path);
-                Row {
-                    name: r.name.clone(),
-                    branch,
-                    https,
-                    ab: git::ahead_behind(&r.path),
-                    dirty: git::dirty(&r.path),
+                if let Some(pb) = &pb {
+                    pb.inc(1);
                 }
-            };
-            pb.inc(1);
-            row
+            }
+            Row {
+                name: r.name.clone(),
+                branch,
+                https,
+                ab: git::ahead_behind(&r.path),
+                dirty: git::dirty(&r.path),
+            }
         })
         .collect();
-    pb.finish_and_clear();
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
 
     render(&rows);
     Ok(())

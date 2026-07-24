@@ -26,14 +26,19 @@ pub fn err(m: &str) {
     }
 }
 
-/// A determinate progress bar (draws to stderr; auto-hidden when not a TTY).
+/// A determinate progress bar that animates via a steady tick (spinner +
+/// elapsed), so it reads as live even while parallel work is in flight rather
+/// than looking frozen between updates. Leads with the count (`Fetching 3/12`).
+/// Draws to stderr; auto-hidden when not a TTY.
 pub fn bar(len: u64, msg: &str) -> ProgressBar {
     let pb = ProgressBar::new(len);
     pb.set_style(
-        ProgressStyle::with_template("  {msg} [{bar:30.cyan/blue}] {pos}/{len} ({elapsed})")
+        ProgressStyle::with_template("  {spinner:.cyan} {msg} {pos}/{len} [{bar:24.cyan/blue}] {elapsed}")
             .unwrap()
-            .progress_chars("=>-"),
+            .progress_chars("=>-")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
     pb.set_message(msg.to_string());
+    pb.enable_steady_tick(std::time::Duration::from_millis(90));
     pb
 }
