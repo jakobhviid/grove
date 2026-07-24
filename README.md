@@ -13,17 +13,22 @@ init <shell>` prints them for your shell, so there's one source of truth and
 
 ## Install
 
-```sh
-brew install jakobhviid/tap/grove       # macOS & Linux
-```
-
-Then add one line to your shell rc:
+**Homebrew** (macOS & Linux) — pours a prebuilt bottle on x86_64 Linux, so no
+compiler/build tools are needed:
 
 ```sh
-eval "$(grove init zsh)"                 # zsh
-eval "$(grove init bash)"                # bash
-grove init fish | source                 # fish
+brew install jakobhviid/tap/grove
 ```
+
+**Or paste one line** — no Homebrew, no compiler, no root (installs to
+`~/.local/bin`). Ideal for servers, containers, and immutable distros:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakobhviid/grove/main/install.sh | sh
+```
+
+Either way the commands (`gst ga gc gp gpp lg lgp lt`) work immediately. The
+short colliding aliases (`gs`, `gcp`) are opt-in — see the grove file below.
 
 Build from source (needs Rust):
 

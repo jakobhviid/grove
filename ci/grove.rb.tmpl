@@ -4,6 +4,14 @@ class Grove < Formula
   version "@VERSION@"
   license "MIT"
 
+  # Prebuilt x86_64 Linux bottle: `brew install` pours it directly, so it needs
+  # no C compiler / build tools (works on minimal & immutable distros). Other
+  # platforms fall back to the url+install path below (Macs have the toolchain).
+  bottle do
+    root_url "https://github.com/jakobhviid/grove/releases/download/v@VERSION@"
+    sha256 cellar: :any_skip_relocation, x86_64_linux: "@BOTTLE_SHA@"
+  end
+
   depends_on "git"
 
   on_macos do
