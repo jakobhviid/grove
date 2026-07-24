@@ -40,7 +40,12 @@ class Grove < Formula
     # Each command is its own binary — no setup, works in any shell.
     bin.install %w[grove gst ga gc gp gpp lg lgp lgpp lt]
     generate_completions_from_executable(bin/"grove", "completions")
+    # Man page for each command: grove has a `man` subcommand; the rest render
+    # theirs with a hidden `--man` flag.
     (man1/"grove.1").write Utils.safe_popen_read(bin/"grove", "man")
+    %w[gst ga gc gp gpp lg lgp lgpp lt].each do |c|
+      (man1/"#{c}.1").write Utils.safe_popen_read(bin/c, "--man")
+    end
   end
 
   def caveats

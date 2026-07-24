@@ -30,3 +30,24 @@ pub fn maybe_version(name: &str, args: &[String]) -> bool {
     }
     false
 }
+
+/// If `args` is exactly `--man`, print a roff man page for a passthrough command
+/// and return true. Hand-rolled (no clap) so the passthrough bins stay tiny and
+/// keep forwarding everything else to git. `git_cmd` is what it wraps.
+pub fn maybe_man(name: &str, summary: &str, git_cmd: &str, args: &[String]) -> bool {
+    if !(args.len() == 1 && args[0] == "--man") {
+        return false;
+    }
+    print!(
+        ".TH {up} 1 \"grove {ver}\" \"grove\"\n\
+         .SH NAME\n{name} \\- {summary}\n\
+         .SH SYNOPSIS\n.B {name}\n[\\fIargs\\fR...]\n\
+         .SH DESCRIPTION\n\
+         A grove shortcut that runs \\fB{git_cmd}\\fR, forwarding any extra arguments \
+         straight to git. Part of the grove suite.\n\
+         .SH SEE ALSO\n.BR grove (1), \\fB{git_cmd}\\fR\n",
+        up = name.to_uppercase(),
+        ver = env!("CARGO_PKG_VERSION"),
+    );
+    true
+}

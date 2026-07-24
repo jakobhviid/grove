@@ -221,6 +221,7 @@ name = "gc"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "clap_mangen",
  "grove-core",
 ]
 
@@ -306,6 +307,7 @@ name = "lg"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "clap_mangen",
  "grove-core",
 ]
 
@@ -314,6 +316,7 @@ name = "lgp"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "clap_mangen",
  "grove-core",
 ]
 
@@ -322,6 +325,7 @@ name = "lgpp"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "clap_mangen",
  "grove-core",
 ]
 
@@ -336,6 +340,7 @@ name = "lt"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "clap_mangen",
  "grove-core",
 ]
 

@@ -2,7 +2,7 @@
 fn main() {
     grove_core::reset_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if grove_core::maybe_version("gp", &args) {
+    if grove_core::maybe_version("gp", &args) || grove_core::maybe_man("gp", "git pull", "git pull", &args) {
         return;
     }
     if let Err(e) = grove_core::passthrough::pull(&args) {
