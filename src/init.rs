@@ -13,7 +13,7 @@ pub enum Shell {
 
 /// (alias, grove subcommand) — the shortcuts this kit ships.
 const ALIASES: &[(&str, &str)] = &[
-    ("gs", "grove status"),
+    ("gst", "grove status"),
     ("ga", "grove add"),
     ("gc", "grove commit"),
     ("gcp", "grove commit --all --push"),

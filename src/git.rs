@@ -50,6 +50,15 @@ pub fn is_https(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// True if the current directory is inside a git work tree.
+pub fn inside_repo() -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 pub fn branch(repo: &Path) -> String {
     match git_out(repo, &["branch", "--show-current"]) {
         Some(b) if !b.is_empty() => b,

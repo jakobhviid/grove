@@ -17,9 +17,12 @@ struct Row {
 
 pub fn run(dir: Option<&Path>) -> Result<()> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
+    if !dir.is_dir() {
+        anyhow::bail!("not a directory: {}", dir.display());
+    }
     let repos = git::discover(dir);
     if repos.is_empty() {
-        println!("No git repos found.");
+        println!("No git repositories in {}", dir.display());
         return Ok(());
     }
 

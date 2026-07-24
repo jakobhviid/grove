@@ -4,7 +4,7 @@
 //! icon next to their name, so a workspace folder shows at a glance which
 //! children are repos.
 use crate::ui;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,22 +12,31 @@ const ICON_DIR: &str = "\u{f07b}"; //
 const ICON_GIT: &str = "\u{e725}"; //  (git branch)
 const ICON_FILE: &str = "\u{f15b}"; //
 
-pub fn run(dir: Option<&Path>, level: usize) -> Result<()> {
+pub fn run(dir: Option<&Path>, level: usize, all: bool) -> Result<()> {
     let root = dir.unwrap_or_else(|| Path::new("."));
+    if !root.is_dir() {
+        bail!("not a directory: {}", root.display());
+    }
     println!("{}", ui::paint("1;34", &root.display().to_string()));
-    walk(root, 1, level.max(1), &String::new());
+    walk(root, 1, level.max(1), all, &String::new());
     Ok(())
 }
 
-/// Immediate children: dotfiles hidden, directories first, each group by name.
-fn children(dir: &Path) -> Vec<(PathBuf, bool)> {
+/// Immediate children: directories first then files (each by name). Dotfiles are
+/// hidden unless `all` is set.
+fn children(dir: &Path, all: bool) -> Vec<(PathBuf, bool)> {
     let Ok(rd) = fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut v: Vec<(PathBuf, bool)> = rd
         .flatten()
         .map(|e| e.path())
-        .filter(|p| !p.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(true))
+        .filter(|p| {
+            all || !p
+                .file_name()
+                .map(|n| n.to_string_lossy().starts_with('.'))
+                .unwrap_or(true)
+        })
         .map(|p| {
             let is_dir = p.is_dir();
             (p, is_dir)
@@ -41,8 +50,8 @@ fn name(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-fn walk(dir: &Path, depth: usize, max: usize, prefix: &str) {
-    let items = children(dir);
+fn walk(dir: &Path, depth: usize, max: usize, all: bool, prefix: &str) {
+    let items = children(dir, all);
     let n = items.len();
     for (i, (path, is_dir)) in items.iter().enumerate() {
         let last = i + 1 == n;
@@ -63,7 +72,7 @@ fn walk(dir: &Path, depth: usize, max: usize, prefix: &str) {
 
         if *is_dir && depth < max {
             let child_prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
-            walk(path, depth + 1, max, &child_prefix);
+            walk(path, depth + 1, max, all, &child_prefix);
         }
     }
 }

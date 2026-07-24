@@ -14,6 +14,7 @@ mod ui;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -72,6 +73,9 @@ enum Cmd {
         /// How many levels deep to descend.
         #[arg(short, long, default_value_t = 2)]
         level: usize,
+        /// Show hidden entries (dotfiles) too.
+        #[arg(short, long)]
+        all: bool,
     },
     /// Print shell aliases (gs, ga, …). Add `eval "$(grove init zsh)"` (or bash) / `grove init fish | source`.
     Init { shell: init::Shell },
@@ -83,8 +87,49 @@ enum Cmd {
     Man,
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn main() {
+    if let Err(e) = run() {
+        ui::err(&format!("{e}"));
+        std::process::exit(1);
+    }
+}
+
+/// Multi-call dispatch: when grove is invoked through a short-name symlink
+/// (gst, ga, …), splice the matching subcommand in front of the args and let
+/// clap parse the rest — so every entry point keeps full flag/help handling.
+/// Invoked as `grove`, parse normally.
+fn parse_cli() -> Cli {
+    let mut args = std::env::args_os();
+    let arg0 = args.next().unwrap_or_default();
+    let rest: Vec<OsString> = args.collect();
+    let prog = std::path::Path::new(&arg0)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let inject: &[&str] = match prog {
+        "gst" => &["status"],
+        "ga" => &["add"],
+        "gc" => &["commit"],
+        "gcp" => &["commit", "--all", "--push"],
+        "gp" => &["pull"],
+        "gpp" => &["push"],
+        "lg" => &["overview"],
+        "lgp" => &["sync"],
+        "lt" => &["tree"],
+        _ => &[],
+    };
+    if inject.is_empty() {
+        Cli::parse()
+    } else {
+        let mut v: Vec<OsString> = vec![arg0];
+        v.extend(inject.iter().map(OsString::from));
+        v.extend(rest);
+        Cli::parse_from(v)
+    }
+}
+
+fn run() -> Result<()> {
+    let cli = parse_cli();
     match cli.cmd {
         Cmd::Status { args } => passthrough::exec(&["status"], &args),
         Cmd::Add { paths } => {
@@ -99,7 +144,7 @@ fn main() -> Result<()> {
         Cmd::Push { args } => passthrough::exec(&["push"], &args),
         Cmd::Overview { dir } => overview::run(dir.as_deref()),
         Cmd::Sync { dir } => sync::run(dir.as_deref()),
-        Cmd::Tree { dir, level } => tree::run(dir.as_deref(), level),
+        Cmd::Tree { dir, level, all } => tree::run(dir.as_deref(), level, all),
         Cmd::Init { shell } => {
             init::print(shell);
             Ok(())

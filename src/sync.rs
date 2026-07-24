@@ -9,17 +9,26 @@ use std::path::Path;
 
 pub fn run(dir: Option<&Path>) -> Result<()> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
+    if !dir.is_dir() {
+        anyhow::bail!("not a directory: {}", dir.display());
+    }
     let repos = git::discover(dir);
     if repos.is_empty() {
-        println!("No git repos found.");
+        println!("No git repositories in {}", dir.display());
         return Ok(());
     }
 
-    ui::info("Fetching...");
-    repos
-        .par_iter()
-        .filter(|r| !git::is_https(&r.path))
-        .for_each(|r| git::fetch(&r.path));
+    // Fetch every ssh repo in parallel, with a progress bar — this is the slow
+    // part, since each fetch is a network round-trip.
+    let to_fetch: Vec<_> = repos.iter().filter(|r| !git::is_https(&r.path)).collect();
+    if !to_fetch.is_empty() {
+        let pb = ui::bar(to_fetch.len() as u64, "Fetching");
+        to_fetch.par_iter().for_each(|r| {
+            git::fetch(&r.path);
+            pb.inc(1);
+        });
+        pb.finish_and_clear();
+    }
 
     for r in &repos {
         if git::is_https(&r.path) || git::dirty(&r.path).any() {
