@@ -1,0 +1,9 @@
+[package]
+name = "gp"
+description = "git pull"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+grove-core = { path = "../grove-core" }

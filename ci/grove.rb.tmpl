@@ -29,24 +29,22 @@ class Grove < Formula
   end
 
   def install
-    bin.install "grove"
-    # Short commands are symlinks to grove (it dispatches on the invoked name),
-    # so they work in any shell with no setup.
-    %w[gst ga gc gcp gp gpp lg lgp lt].each do |name|
-      bin.install_symlink "grove" => name
-    end
+    # Each command is its own binary — no setup, works in any shell.
+    bin.install %w[grove gst ga gc gp gpp lg lgp lt]
     generate_completions_from_executable(bin/"grove", "completions")
     (man1/"grove.1").write Utils.safe_popen_read(bin/"grove", "man")
   end
 
   def caveats
     <<~EOS
-      The short commands work immediately in any shell — no setup:
-        gst ga gc gcp gp gpp   (git status/add/commit/commit+push/pull/push)
-        lg lgp lt              (multi-repo overview / sync / tree)
+      The commands work immediately in any shell — no setup:
+        gst ga gc gp gpp   (git status / add / commit / pull / push)
+        lg lgp lt          (multi-repo overview / sync / tree)
+      Run `grove` for an overview.
 
-      Optional: `grove init zsh|bash|fish` prints them as shell aliases instead,
-      if you'd rather alias them or rename them.
+      Optional short aliases (gs, gcp, …) via a grove file:
+        grove example > ~/.config/grove/aliases     # then edit to taste
+        eval "$(grove init zsh)"                     # zsh (or bash / fish)
 
       The `lt` tree view uses Nerd Font icons — use a Nerd Font for best results.
     EOS

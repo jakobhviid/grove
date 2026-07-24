@@ -1,0 +1,10 @@
+[package]
+name = "lt"
+description = "Tree view (dirs first, icons); git repos get a git icon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+grove-core = { path = "../grove-core" }
+clap = { version = "4", features = ["derive"] }

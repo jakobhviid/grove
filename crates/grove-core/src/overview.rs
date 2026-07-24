@@ -26,25 +26,31 @@ pub fn run(dir: Option<&Path>) -> Result<()> {
         return Ok(());
     }
 
-    // Gather every repo's state in parallel (fetch happens inside, ssh only).
+    // Gather every repo's state in parallel (fetch happens inside, ssh only),
+    // with a progress bar — the fetches are the slow, network-bound part.
+    let pb = ui::bar(repos.len() as u64, "Fetching");
     let rows: Vec<Row> = repos
         .par_iter()
         .map(|r| {
             let https = git::is_https(&r.path);
             let branch = git::branch(&r.path);
-            if https {
-                return Row { name: r.name.clone(), branch, https, ab: None, dirty: git::Dirty::default() };
-            }
-            git::fetch(&r.path);
-            Row {
-                name: r.name.clone(),
-                branch,
-                https,
-                ab: git::ahead_behind(&r.path),
-                dirty: git::dirty(&r.path),
-            }
+            let row = if https {
+                Row { name: r.name.clone(), branch, https, ab: None, dirty: git::Dirty::default() }
+            } else {
+                git::fetch(&r.path);
+                Row {
+                    name: r.name.clone(),
+                    branch,
+                    https,
+                    ab: git::ahead_behind(&r.path),
+                    dirty: git::dirty(&r.path),
+                }
+            };
+            pb.inc(1);
+            row
         })
         .collect();
+    pb.finish_and_clear();
 
     render(&rows);
     Ok(())

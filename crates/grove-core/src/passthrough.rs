@@ -15,6 +15,30 @@ fn ensure_repo() -> Result<()> {
     Ok(())
 }
 
+/// `git status` (alias gst).
+pub fn status(extra: &[String]) -> Result<()> {
+    exec(&["status"], extra)
+}
+
+/// `git add` — stages `.` when no paths are given, else the paths (alias ga).
+pub fn add(paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        exec(&["add", "."], &[])
+    } else {
+        exec(&["add"], paths)
+    }
+}
+
+/// `git pull` (alias gp).
+pub fn pull(extra: &[String]) -> Result<()> {
+    exec(&["pull"], extra)
+}
+
+/// `git push` (alias gpp).
+pub fn push(extra: &[String]) -> Result<()> {
+    exec(&["push"], extra)
+}
+
 /// Replace this process with `git <prefix...> <extra...>`.
 /// On success (Unix) this never returns; it only returns `Err` if exec fails.
 pub fn exec(prefix: &[&str], extra: &[String]) -> Result<()> {

@@ -56,7 +56,7 @@ jobs:
         run: |
           mkdir -p dist
           tar czf "dist/grove-${{ matrix.target }}.tar.gz" \
-            -C "target/${{ matrix.target }}/release" grove
+            -C "target/${{ matrix.target }}/release" grove gst ga gc gp gpp lg lgp lt
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}

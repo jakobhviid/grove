@@ -210,15 +210,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "ga"
+version = "0.1.0"
+dependencies = [
+ "grove-core",
+]
+
+[[package]]
+name = "gc"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "grove-core",
+]
+
+[[package]]
+name = "gp"
+version = "0.1.0"
+dependencies = [
+ "grove-core",
+]
+
+[[package]]
+name = "gpp"
+version = "0.1.0"
+dependencies = [
+ "grove-core",
+]
+
+[[package]]
 name = "grove"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "clap_complete",
  "clap_mangen",
+ "grove-core",
+]
+
+[[package]]
+name = "grove-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "indicatif",
+ "libc",
  "rayon",
+]
+
+[[package]]
+name = "gst"
+version = "0.1.0"
+dependencies = [
+ "grove-core",
 ]
 
 [[package]]
@@ -258,10 +302,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "lg"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "grove-core",
+]
+
+[[package]]
+name = "lgp"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "grove-core",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "lt"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "grove-core",
+]
 
 [[package]]
 name = "number_prefix"
