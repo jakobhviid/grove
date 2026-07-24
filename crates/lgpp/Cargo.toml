@@ -1,0 +1,10 @@
+[package]
+name = "lgpp"
+description = "Push every repo in a folder that has unpushed commits (no pull)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+grove-core = { path = "../grove-core" }
+clap = { version = "4", features = ["derive"] }

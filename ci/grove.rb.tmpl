@@ -38,7 +38,7 @@ class Grove < Formula
 
   def install
     # Each command is its own binary — no setup, works in any shell.
-    bin.install %w[grove gst ga gc gp gpp lg lgp lt]
+    bin.install %w[grove gst ga gc gp gpp lg lgp lgpp lt]
     generate_completions_from_executable(bin/"grove", "completions")
     (man1/"grove.1").write Utils.safe_popen_read(bin/"grove", "man")
   end

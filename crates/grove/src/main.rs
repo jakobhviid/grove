@@ -62,6 +62,7 @@ fn overview() {
     hdr("MULTI-REPO  (run in a folder of repos)");
     row("lg [dir]", "dashboard: branch, ahead/behind, dirty state per repo");
     row("lgp [dir]", "auto pull/push the clean, in-sync repos, then show lg");
+    row("lgpp [dir]", "push every repo with unpushed commits (no pull)");
 
     hdr("FILES");
     row("lt [dir] [-a]", "tree view; git repos get a git icon");
