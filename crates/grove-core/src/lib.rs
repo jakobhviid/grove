@@ -19,3 +19,14 @@ pub fn reset_sigpipe() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 }
+
+/// If `args` is exactly `--version` or `-V`, print "<name> <version>" and return
+/// true so the caller can exit. Lets the thin passthrough bins (which otherwise
+/// forward everything to git) answer `--version` themselves.
+pub fn maybe_version(name: &str, args: &[String]) -> bool {
+    if args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V") {
+        println!("{name} {}", env!("CARGO_PKG_VERSION"));
+        return true;
+    }
+    false
+}

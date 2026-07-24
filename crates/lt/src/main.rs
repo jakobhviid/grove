@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "lt", about = "Tree view (dirs first, icons); git repos get a git icon")]
+#[command(name = "lt", version, about = "Tree view (dirs first, icons); git repos get a git icon")]
 struct Cli {
     /// Directory to list (default: current directory).
     dir: Option<PathBuf>,

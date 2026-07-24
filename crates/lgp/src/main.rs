@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "lgp", about = "Auto pull/push the clean, in-sync repos in a folder, then show the overview")]
+#[command(name = "lgp", version, about = "Auto pull/push the clean, in-sync repos in a folder, then show the overview")]
 struct Cli {
     /// Folder of repositories (default: current directory).
     dir: Option<PathBuf>,

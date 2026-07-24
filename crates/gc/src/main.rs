@@ -3,7 +3,7 @@
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "gc", about = "git commit -m; -a stages tracked changes first, -p pushes after")]
+#[command(name = "gc", version, about = "git commit -m; -a stages tracked changes first, -p pushes after")]
 struct Cli {
     /// Stage all tracked changes first (git commit -a).
     #[arg(short, long)]

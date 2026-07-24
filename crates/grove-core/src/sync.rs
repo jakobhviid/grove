@@ -30,19 +30,49 @@ pub fn run(dir: Option<&Path>) -> Result<()> {
         pb.finish_and_clear();
     }
 
-    for r in &repos {
-        if git::is_https(&r.path) || git::dirty(&r.path).any() {
-            continue;
-        }
-        let Some((ahead, behind)) = git::ahead_behind(&r.path) else {
-            continue;
-        };
-        if behind > 0 && ahead == 0 {
-            println!("{} {}", ui::paint("32", "↓"), r.name);
-            git::pull(&r.path)?;
-        } else if ahead > 0 && behind == 0 {
-            println!("{} {}", ui::paint("32", "↑"), r.name);
-            git::push(&r.path)?;
+    // Decide what actually needs syncing: clean, ssh repos that are strictly
+    // behind (→ pull) or strictly ahead (→ push). Determined in parallel — cheap
+    // local git calls.
+    #[derive(Clone, Copy)]
+    enum Op {
+        Pull,
+        Push,
+    }
+    let to_sync: Vec<(&git::Repo, Op)> = repos
+        .par_iter()
+        .filter_map(|r| {
+            if git::is_https(&r.path) || git::dirty(&r.path).any() {
+                return None;
+            }
+            let (ahead, behind) = git::ahead_behind(&r.path)?;
+            if behind > 0 && ahead == 0 {
+                Some((r, Op::Pull))
+            } else if ahead > 0 && behind == 0 {
+                Some((r, Op::Push))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // The pull/push is the part that actually transfers data (and runs quiet),
+    // so give it its own progress bar, then report what was synced.
+    if !to_sync.is_empty() {
+        let pb = ui::bar(to_sync.len() as u64, "Syncing");
+        to_sync.par_iter().for_each(|(r, op)| {
+            let _ = match op {
+                Op::Pull => git::pull(&r.path),
+                Op::Push => git::push(&r.path),
+            };
+            pb.inc(1);
+        });
+        pb.finish_and_clear();
+        for (r, op) in &to_sync {
+            let arrow = match op {
+                Op::Pull => "↓",
+                Op::Push => "↑",
+            };
+            println!("  {} {}", ui::paint("32", arrow), r.name);
         }
     }
 

@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "lg", about = "Multi-repo dashboard: branch, ahead/behind, and dirty state per repo")]
+#[command(name = "lg", version, about = "Multi-repo dashboard: branch, ahead/behind, and dirty state per repo")]
 struct Cli {
     /// Folder of repositories (default: current directory).
     dir: Option<PathBuf>,

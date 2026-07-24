@@ -2,6 +2,9 @@
 fn main() {
     grove_core::reset_sigpipe();
     let paths: Vec<String> = std::env::args().skip(1).collect();
+    if grove_core::maybe_version("ga", &paths) {
+        return;
+    }
     if let Err(e) = grove_core::passthrough::add(&paths) {
         grove_core::ui::err(&e.to_string());
         std::process::exit(1);
