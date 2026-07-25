@@ -89,7 +89,13 @@ fn render(rows: &[Row]) {
     );
 
     for r in rows {
-        let name = format!("{:<25}", r.name);
+        // A fully-clean, in-sync ssh repo needs no attention — dim its name so the
+        // eye jumps to the repos that do.
+        let calm = !r.https && !r.dirty.any() && matches!(r.ab, Some((0, 0)));
+        let name = {
+            let padded = format!("{:<25}", r.name);
+            if calm { ui::paint("90", &padded) } else { padded }
+        };
         let branch = ui::paint("34", &format!("{:<14}", r.branch));
 
         if r.https {
@@ -101,7 +107,7 @@ fn render(rows: &[Row]) {
             Some((a, b)) if a > 0 && b > 0 => (format!("↑{a} ↓{b}"), "33"),
             Some((a, _)) if a > 0 => (format!("↑{a}"), "33"),
             Some((_, b)) if b > 0 => (format!("↓{b}"), "31"),
-            Some(_) => ("✓".to_string(), "32"),
+            Some(_) => ("✓".to_string(), if calm { "90" } else { "32" }),
             None => ("—".to_string(), "37"),
         };
 
@@ -117,5 +123,58 @@ fn render(rows: &[Row]) {
         }
         println!("{line}");
     }
+    summary(rows);
     println!();
+}
+
+/// A one-line roll-up under the table — counts toned by severity — plus the exact
+/// command to clear each kind of pending work. This is the at-a-glance triage.
+fn summary(rows: &[Row]) {
+    let https: Vec<&str> = rows.iter().filter(|r| r.https).map(|r| r.name.as_str()).collect();
+    let (mut clean, mut dirty, mut ahead, mut behind, mut diverged, mut noup) = (0, 0, 0, 0, 0, 0);
+    for r in rows.iter().filter(|r| !r.https) {
+        if r.dirty.any() {
+            dirty += 1;
+        }
+        match r.ab {
+            Some((a, b)) if a > 0 && b > 0 => diverged += 1,
+            Some((a, _)) if a > 0 => ahead += 1,
+            Some((_, b)) if b > 0 => behind += 1,
+            Some(_) => { if !r.dirty.any() { clean += 1 } }
+            None => noup += 1,
+        }
+    }
+
+    let sep = ui::paint("90", " · ");
+    let mut parts = vec![ui::paint("1", &format!("{} repos", rows.len()))];
+    let mut add = |cnt: usize, label: &str, color: &str| {
+        if cnt > 0 {
+            parts.push(ui::paint(color, &format!("{cnt} {label}")));
+        }
+    };
+    add(clean, "clean", "32");
+    add(dirty, "dirty", "33");
+    add(ahead, "to push", "33");
+    add(behind, "to pull", "31");
+    add(diverged, "diverged", "31");
+    add(https.len(), "https", "31");
+    add(noup, "no upstream", "90");
+    println!("\n  {}", parts.join(&sep));
+
+    let mut hints: Vec<String> = Vec::new();
+    if ahead > 0 {
+        hints.push(format!("`lgpp` pushes {ahead} with unpushed commits"));
+    }
+    if behind > 0 {
+        hints.push("`lgp` fast-forwards the clean, behind repos".into());
+    }
+    if !https.is_empty() {
+        hints.push(format!("switch to SSH: {}", https.join(", ")));
+    }
+    if diverged > 0 {
+        hints.push(format!("{diverged} diverged — reconcile by hand"));
+    }
+    for h in hints {
+        println!("  {} {}", ui::paint("36", "→"), h);
+    }
 }

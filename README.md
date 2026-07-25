@@ -46,7 +46,7 @@ cargo build --release                    # → ./target/release/grove
 | `gcp` | `grove commit --all --push` | `git commit -a -m <msg>` then `git push`                   |
 | `gp`  | `grove pull`       | `git pull`                                                          |
 | `gpp` | `grove push`       | `git push`                                                          |
-| `lg`  | `grove overview`   | Dashboard of every repo in a folder: branch, ahead/behind, dirty    |
+| `lg`  | `grove overview`   | Dashboard of every repo: branch, ahead/behind, dirty — clean repos dim so the ones needing work pop, with a summary + next-step hint |
 | `lgp` | `grove sync`       | Auto pull/push clean in-sync repos, then show the overview          |
 | `lt`  | `grove tree`       | Tree view (2 levels, icons); git repos get a git icon               |
 
@@ -57,6 +57,9 @@ color, pager, signals, and exit codes are unchanged.
 
 - `overview`/`sync` fetch repos in parallel and flag any `origin` still on HTTPS
   (so you can switch it to SSH). Dirty or diverged repos are never auto-synced.
+- The dashboard ends with a severity-colored roll-up (`N repos · X clean · Y
+  dirty · Z to push …`) and a `→` hint naming the command that clears each kind
+  of pending work — so `lg`/`lgp`/`lgpp` give you the triage and the next step.
 - `tree` has no external dependencies (no eza) and hides dotfiles by default.
 - Nerd Font icons — use a Nerd Font for `lt` to render correctly.
 
