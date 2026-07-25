@@ -211,14 +211,14 @@ dependencies = [
 
 [[package]]
 name = "ga"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "grove-core",
 ]
 
 [[package]]
 name = "gc"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -227,21 +227,21 @@ dependencies = [
 
 [[package]]
 name = "gp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "grove-core",
 ]
 
 [[package]]
 name = "gpp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "grove-core",
 ]
 
 [[package]]
 name = "grove"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "grove-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "indicatif",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "gst"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "grove-core",
 ]
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "lg"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -313,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "lgp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "lgpp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_mangen",
@@ -337,7 +337,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "lt"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "clap_mangen",

@@ -9,12 +9,15 @@ use clap::{CommandFactory, Parser, Subcommand};
 const REPO_URL: &str = "https://github.com/jakobhviid/grove";
 const AFTER_HELP: &str = concat!(
     "Repository: https://github.com/jakobhviid/grove (inspect the source there if needed)\n",
-    "LLM guide: run `grove llm` for a full machine-readable reference (the whole command suite)."
+    "LLM guide: pass `--llm` for a full machine-readable reference (the whole command suite)."
 );
 
 #[derive(Parser)]
 #[command(name = "grove", version, about = "The grove command suite — overview and shell-alias setup.", after_help = AFTER_HELP, after_long_help = AFTER_HELP)]
 struct Cli {
+    /// Print the full LLM-readable guide (the whole command suite + repo link) and exit.
+    #[arg(long, global = true)]
+    llm: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -25,10 +28,6 @@ enum Cmd {
     Init { shell: config::Shell },
     /// Print a starter grove file you can save to ~/.config/grove/aliases.
     Example,
-    /// Print a full LLM-readable guide to stdout: the whole grove command suite +
-    /// a link to the source repo. Same content as the man page, laid out plainly
-    /// for an LLM/agent to read and drive the tools from zero.
-    Llm,
     /// Print a shell completion script (bash|zsh|fish|…) for `grove` to stdout.
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -39,12 +38,16 @@ enum Cmd {
 
 fn main() {
     grove_core::reset_sigpipe();
+    // `--llm` is a documentation flag like `--help`: works from anywhere.
+    if std::env::args().skip(1).any(|a| a == "--llm") {
+        print!("{}", llm_guide());
+        return;
+    }
     let cli = Cli::parse();
     match cli.cmd {
         None => overview(),
         Some(Cmd::Init { shell }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
-        Some(Cmd::Llm) => print!("{}", llm_guide()),
         Some(Cmd::Completions { shell }) => {
             clap_complete::generate(shell, &mut Cli::command(), "grove", &mut std::io::stdout());
         }
