@@ -89,12 +89,13 @@ fn render(rows: &[Row]) {
     );
 
     for r in rows {
-        // A fully-clean, in-sync ssh repo needs no attention — dim its name so the
-        // eye jumps to the repos that do.
+        // A fully-clean, in-sync ssh repo needs no attention. Rather than dim the
+        // clean rows (which vanish on a dark terminal), keep them normal and make
+        // the rows that DO need attention **bold**, so the eye lands on them.
         let calm = !r.https && !r.dirty.any() && matches!(r.ab, Some((0, 0)));
         let name = {
             let padded = format!("{:<25}", r.name);
-            if calm { ui::paint("90", &padded) } else { padded }
+            if calm { padded } else { ui::paint("1", &padded) }
         };
         let branch = ui::paint("34", &format!("{:<14}", r.branch));
 
@@ -107,7 +108,7 @@ fn render(rows: &[Row]) {
             Some((a, b)) if a > 0 && b > 0 => (format!("↑{a} ↓{b}"), "33"),
             Some((a, _)) if a > 0 => (format!("↑{a}"), "33"),
             Some((_, b)) if b > 0 => (format!("↓{b}"), "31"),
-            Some(_) => ("✓".to_string(), if calm { "90" } else { "32" }),
+            Some(_) => ("✓".to_string(), "32"),
             None => ("—".to_string(), "37"),
         };
 
