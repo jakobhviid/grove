@@ -59,3 +59,8 @@ color, pager, signals, and exit codes are unchanged.
   (so you can switch it to SSH). Dirty or diverged repos are never auto-synced.
 - `tree` has no external dependencies (no eza) and hides dotfiles by default.
 - Nerd Font icons — use a Nerd Font for `lt` to render correctly.
+
+## AI disclosure
+
+Parts of this codebase were written with the assistance of AI coding agents
+(Claude Code, opencode, and others). All changes were reviewed by the maintainer.
