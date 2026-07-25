@@ -6,8 +6,14 @@ mod config;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
+const REPO_URL: &str = "https://github.com/jakobhviid/grove";
+const AFTER_HELP: &str = concat!(
+    "Repository: https://github.com/jakobhviid/grove (inspect the source there if needed)\n",
+    "LLM guide: run `grove llm` for a full machine-readable reference (the whole command suite)."
+);
+
 #[derive(Parser)]
-#[command(name = "grove", version, about = "The grove command suite — overview and shell-alias setup.")]
+#[command(name = "grove", version, about = "The grove command suite — overview and shell-alias setup.", after_help = AFTER_HELP, after_long_help = AFTER_HELP)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -19,6 +25,10 @@ enum Cmd {
     Init { shell: config::Shell },
     /// Print a starter grove file you can save to ~/.config/grove/aliases.
     Example,
+    /// Print a full LLM-readable guide to stdout: the whole grove command suite +
+    /// a link to the source repo. Same content as the man page, laid out plainly
+    /// for an LLM/agent to read and drive the tools from zero.
+    Llm,
     /// Print a shell completion script (bash|zsh|fish|…) for `grove` to stdout.
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -34,6 +44,7 @@ fn main() {
         None => overview(),
         Some(Cmd::Init { shell }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
+        Some(Cmd::Llm) => print!("{}", llm_guide()),
         Some(Cmd::Completions { shell }) => {
             clap_complete::generate(shell, &mut Cli::command(), "grove", &mut std::io::stdout());
         }
@@ -41,6 +52,36 @@ fn main() {
             let _ = clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout());
         }
     }
+}
+
+/// A single self-contained, plain-text guide an LLM/agent can read to drive the
+/// whole grove suite from zero: grove's own command reference (rendered from clap)
+/// followed by the README (which documents every sub-binary), plus the repo link.
+fn llm_guide() -> String {
+    let mut cmd = Cli::command();
+    let mut out = String::new();
+    out.push_str(&format!("grove {} — LLM guide\n", env!("CARGO_PKG_VERSION")));
+    out.push_str(&format!("Repository: {REPO_URL}  (read the source there if you need behavior details)\n"));
+    out.push_str("This is the same reference as `man grove`, laid out plainly for LLM reading.\n");
+    out.push_str("The suite is separate binaries (gst, ga, gc, gp, gpp, lg, lgp, lgpp, lt);\n");
+    out.push_str("run `<cmd> --help` for any one. Full documentation follows.\n\n");
+
+    out.push_str("================================ grove COMMAND REFERENCE ================================\n\n");
+    out.push_str(&cmd.render_long_help().to_string());
+    for sub in cmd.get_subcommands_mut() {
+        if sub.is_hide_set() {
+            continue;
+        }
+        out.push_str(&format!("\n\n-------------------------------- grove {} --------------------------------\n\n", sub.get_name()));
+        out.push_str(&sub.render_long_help().to_string());
+    }
+
+    out.push_str("\n\n================================ GUIDE (README) ================================\n\n");
+    out.push_str(include_str!("../../../README.md"));
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 /// The friendly listing shown when `grove` is run with no arguments.
