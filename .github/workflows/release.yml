@@ -57,7 +57,7 @@ jobs:
         run: |
           mkdir -p dist
           tar czf "dist/grove-${{ matrix.target }}.tar.gz" \
-            -C "target/${{ matrix.target }}/release" grove gst ga gc gp gpp lg lgp lgpp lt
+            -C "target/${{ matrix.target }}/release" grove lg lgp lgpp lt
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -95,7 +95,7 @@ jobs:
           rm -rf bottlestage && mkdir -p "$bin" "$man" "$zc" "$bc" "$fc"
           tar xzf art/grove-x86_64-unknown-linux-musl.tar.gz -C "$bin"
           "$bin/grove" man > "$man/grove.1"
-          for c in gst ga gc gp gpp lg lgp lgpp lt; do "$bin/$c" --man > "$man/$c.1"; done
+          for c in lg lgp lgpp lt; do "$bin/$c" --man > "$man/$c.1"; done
           "$bin/grove" completions zsh  > "$zc/_grove"
           "$bin/grove" completions bash > "$bc/grove"
           "$bin/grove" completions fish > "$fc/grove.fish"

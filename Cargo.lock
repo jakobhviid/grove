@@ -210,39 +210,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ga"
-version = "1.0.0"
-dependencies = [
- "grove-core",
-]
-
-[[package]]
-name = "gc"
-version = "1.0.0"
-dependencies = [
- "clap",
- "clap_mangen",
- "grove-core",
-]
-
-[[package]]
-name = "gp"
-version = "1.0.0"
-dependencies = [
- "grove-core",
-]
-
-[[package]]
-name = "gpp"
-version = "1.0.0"
-dependencies = [
- "grove-core",
-]
-
-[[package]]
 name = "grove"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
  "clap",
  "clap_complete",
  "clap_mangen",
@@ -257,13 +228,6 @@ dependencies = [
  "indicatif",
  "libc",
  "rayon",
-]
-
-[[package]]
-name = "gst"
-version = "1.0.0"
-dependencies = [
- "grove-core",
 ]
 
 [[package]]

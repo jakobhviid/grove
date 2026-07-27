@@ -1,9 +1,0 @@
-[package]
-name = "ga"
-description = "git add (defaults to \".\")"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-grove-core = { path = "../grove-core" }

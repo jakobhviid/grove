@@ -1,9 +1,0 @@
-[package]
-name = "gst"
-description = "git status"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-grove-core = { path = "../grove-core" }

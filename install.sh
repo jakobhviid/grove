@@ -50,10 +50,20 @@ done
 
 echo "Installed:${installed}"
 
+# Best-effort zsh completions: grove emits a single _grove file (covering grove
+# and lg/lgp/lgpp/lt) that we drop in a data dir. We can't edit the user's shell
+# config here, so we print the one line that puts it on fpath.
+COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
+if mkdir -p "$COMP_DIR" 2>/dev/null && "$BIN_DIR/grove" completions zsh > "$COMP_DIR/_grove" 2>/dev/null; then
+    echo "zsh completions: ${COMP_DIR}/_grove"
+    echo "  to enable, add before \`compinit\` in ~/.zshrc:"
+    echo "      fpath=(${COMP_DIR} \$fpath)"
+fi
+
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "note: ${BIN_DIR} is not on your PATH — add it, e.g.:"
        echo "      export PATH=\"${BIN_DIR}:\$PATH\"" ;;
 esac
 
-echo "Done. Run \`${NAME}\` for an overview."
+echo "Done. Run \`${NAME}\` for an overview, or \`${NAME} setup\` to enable the short aliases (gs ga gc …)."

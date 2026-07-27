@@ -1,9 +1,0 @@
-[package]
-name = "gpp"
-description = "git push"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-grove-core = { path = "../grove-core" }

@@ -15,12 +15,12 @@ fn ensure_repo() -> Result<()> {
     Ok(())
 }
 
-/// `git status` (alias gst).
+/// `git status` (`grove status`).
 pub fn status(extra: &[String]) -> Result<()> {
     exec(&["status"], extra)
 }
 
-/// `git add` — stages `.` when no paths are given, else the paths (alias ga).
+/// `git add` — stages `.` when no paths are given, else the paths (`grove add`).
 pub fn add(paths: &[String]) -> Result<()> {
     if paths.is_empty() {
         exec(&["add", "."], &[])
@@ -29,12 +29,12 @@ pub fn add(paths: &[String]) -> Result<()> {
     }
 }
 
-/// `git pull` (alias gp).
+/// `git pull` (`grove pull`).
 pub fn pull(extra: &[String]) -> Result<()> {
     exec(&["pull"], extra)
 }
 
-/// `git push` (alias gpp).
+/// `git push` (`grove push`).
 pub fn push(extra: &[String]) -> Result<()> {
     exec(&["push"], extra)
 }

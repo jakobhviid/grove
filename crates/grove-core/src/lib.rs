@@ -1,7 +1,7 @@
-//! Shared logic behind the grove tools. Each command (gst, ga, gc, gp, gpp, lg,
-//! lgp, lt) is its own thin binary that calls into here; `grove` itself is the
-//! init/config tool. Keeping the logic in one lib means the tools share the same
-//! git handling, colors, and error style without folding into a single binary.
+//! Shared logic behind the grove tools. `grove` calls in here for the git verbs
+//! (status/add/commit/pull/push) and the multi-repo tools lg/lgp/lgpp/lt are
+//! their own thin binaries that do too. Keeping the logic in one lib means the
+//! tools share the same git handling, colors, and error style.
 pub mod git;
 pub mod overview;
 pub mod passthrough;
@@ -18,36 +18,4 @@ pub fn reset_sigpipe() {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-}
-
-/// If `args` is exactly `--version` or `-V`, print "<name> <version>" and return
-/// true so the caller can exit. Lets the thin passthrough bins (which otherwise
-/// forward everything to git) answer `--version` themselves.
-pub fn maybe_version(name: &str, args: &[String]) -> bool {
-    if args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V") {
-        println!("{name} {}", env!("CARGO_PKG_VERSION"));
-        return true;
-    }
-    false
-}
-
-/// If `args` is exactly `--man`, print a roff man page for a passthrough command
-/// and return true. Hand-rolled (no clap) so the passthrough bins stay tiny and
-/// keep forwarding everything else to git. `git_cmd` is what it wraps.
-pub fn maybe_man(name: &str, summary: &str, git_cmd: &str, args: &[String]) -> bool {
-    if !(args.len() == 1 && args[0] == "--man") {
-        return false;
-    }
-    print!(
-        ".TH {up} 1 \"grove {ver}\" \"grove\"\n\
-         .SH NAME\n{name} \\- {summary}\n\
-         .SH SYNOPSIS\n.B {name}\n[\\fIargs\\fR...]\n\
-         .SH DESCRIPTION\n\
-         A grove shortcut that runs \\fB{git_cmd}\\fR, forwarding any extra arguments \
-         straight to git. Part of the grove suite.\n\
-         .SH SEE ALSO\n.BR grove (1), \\fB{git_cmd}\\fR\n",
-        up = name.to_uppercase(),
-        ver = env!("CARGO_PKG_VERSION"),
-    );
-    true
 }
