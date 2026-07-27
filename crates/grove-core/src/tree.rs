@@ -18,7 +18,7 @@ pub fn run(dir: Option<&Path>, level: usize, all: bool) -> Result<()> {
         bail!("not a directory: {}", root.display());
     }
     println!("{}", ui::paint("1;34", &root.display().to_string()));
-    walk(root, 1, level.max(1), all, &String::new());
+    walk(root, 1, level.max(1), all, "");
     Ok(())
 }
 
