@@ -8,6 +8,6 @@ license.workspace = true
 [dependencies]
 grove-core = { path = "../grove-core" }
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
 clap_mangen = "0.2"
