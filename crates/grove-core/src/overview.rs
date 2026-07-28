@@ -78,14 +78,24 @@ fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
 }
 
 fn render(rows: &[Row]) {
+    // Size the Repository and Branch columns to their widest entry (never below
+    // the header) so a long name like `opencode-dynamic-custom-providers` can't
+    // shove the rest of the row out of alignment. Count chars, not bytes, so a
+    // Danish æ/ø/å in a name lines up the same as an ASCII one.
+    let width = |header: &str, f: &dyn Fn(&Row) -> usize| {
+        rows.iter().map(f).max().unwrap_or(0).max(header.chars().count())
+    };
+    let name_w = width("Repository", &|r| r.name.chars().count());
+    let branch_w = width("Branch", &|r| r.branch.chars().count());
+
     println!();
     println!(
         "  {}",
-        ui::paint("1", &format!("{:<25} {:<14} {}", "Repository", "Branch", "Status"))
+        ui::paint("1", &format!("{:<name_w$} {:<branch_w$} {}", "Repository", "Branch", "Status"))
     );
     println!(
         "  {}",
-        ui::paint("90", &format!("{:<25} {:<14} {}", "─".repeat(25), "─".repeat(14), "──────"))
+        ui::paint("90", &format!("{} {} {}", "─".repeat(name_w), "─".repeat(branch_w), "──────"))
     );
 
     for r in rows {
@@ -94,10 +104,10 @@ fn render(rows: &[Row]) {
         // the rows that DO need attention **bold**, so the eye lands on them.
         let calm = !r.https && !r.dirty.any() && matches!(r.ab, Some((0, 0)));
         let name = {
-            let padded = format!("{:<25}", r.name);
+            let padded = format!("{:<name_w$}", r.name);
             if calm { padded } else { ui::paint("1", &padded) }
         };
-        let branch = ui::paint("34", &format!("{:<14}", r.branch));
+        let branch = ui::paint("34", &format!("{:<branch_w$}", r.branch));
 
         if r.https {
             println!("  {name} {branch} {}", ui::paint("31", "HTTPS — switch to SSH"));
