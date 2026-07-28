@@ -7,6 +7,34 @@ use anyhow::Result;
 use rayon::prelude::*;
 use std::path::Path;
 
+// Nerd Font forge marks for the clickable link column. Known SaaS hosts get
+// their brand glyph; self-hosted / Gitea / Forgejo / Codeberg / GitHub
+// Enterprise / anything else falls back to a generic git logo (their domains
+// are arbitrary, so the host can't identify them). Assumes a Nerd Font, exactly
+// as `lt` does.
+const ICON_GITHUB: &str = "\u{f09b}"; //  (octocat)
+const ICON_GITLAB: &str = "\u{f296}"; //  (fox)
+const ICON_BITBUCKET: &str = "\u{f171}"; //
+const ICON_GIT: &str = "\u{e702}"; //  (generic git)
+
+/// Pick the forge glyph for a repo's https web URL (`https://host/owner/repo`).
+fn forge_icon(web_url: &str) -> &'static str {
+    let host = web_url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if host == "github.com" || host.ends_with(".github.com") {
+        ICON_GITHUB
+    } else if host.contains("gitlab") {
+        ICON_GITLAB
+    } else if host.contains("bitbucket") {
+        ICON_BITBUCKET
+    } else {
+        ICON_GIT
+    }
+}
+
 struct Row {
     name: String,
     branch: String,
@@ -88,21 +116,33 @@ fn render(rows: &[Row]) {
     let width = |header: &str, f: &dyn Fn(&Row) -> usize| {
         rows.iter().map(f).max().unwrap_or(0).max(header.chars().count())
     };
-    fn url_of(r: &Row) -> &str {
-        r.url.as_deref().unwrap_or("—")
-    }
     let name_w = width("Repository", &|r| r.name.chars().count());
     let branch_w = width("Branch", &|r| r.branch.chars().count());
-    let url_w = width("URL", &|r| url_of(r).chars().count());
+
+    // The forge-link column sits right after the repo name and only appears on
+    // terminals that render OSC 8 hyperlinks — otherwise a lone Nerd-Font glyph
+    // would be unclickable decoration, so we drop the column entirely rather
+    // than show a dead icon. The glyph assumes a Nerd Font, like `lt` (see the
+    // brew caveat). `link_seg` reserves the 1-glyph slot: a cell plus a trailing
+    // space when the column is on, or the empty string when off (so name and
+    // branch sit a single space apart, exactly as before this column existed).
+    let links = ui::hyperlinks();
+    let link_seg = |cell: &str| if links { format!("{cell} ") } else { String::new() };
+    let row_link = |r: &Row| match &r.url {
+        // The glyph is the click target; clicking opens the repo's web page.
+        Some(u) => link_seg(&ui::link(u, &ui::paint("36", forge_icon(u)))),
+        // No origin: a blank keeps the Branch column aligned under the header.
+        None => link_seg(" "),
+    };
 
     println!();
     println!(
         "  {}",
-        ui::paint("1", &format!("{:<name_w$} {:<branch_w$} {:<url_w$} {}", "Repository", "Branch", "URL", "Status"))
+        ui::paint("1", &format!("{:<name_w$} {}{:<branch_w$} {}", "Repository", link_seg(" "), "Branch", "Status"))
     );
     println!(
         "  {}",
-        ui::paint("90", &format!("{} {} {} {}", "─".repeat(name_w), "─".repeat(branch_w), "─".repeat(url_w), "──────"))
+        ui::paint("90", &format!("{} {}{} ──────", "─".repeat(name_w), link_seg("─"), "─".repeat(branch_w)))
     );
 
     for r in rows {
@@ -114,21 +154,11 @@ fn render(rows: &[Row]) {
             let padded = format!("{:<name_w$}", r.name);
             if calm { padded } else { ui::paint("1", &padded) }
         };
+        let link = row_link(r);
         let branch = ui::paint("34", &format!("{:<branch_w$}", r.branch));
 
-        // URL column: underline it so it reads as a link (terminals make an
-        // http(s) URL click-through); pad AFTER painting so the underline
-        // covers the URL, not the trailing blanks. A repo with no origin shows
-        // a dim dash.
-        let url_txt = url_of(r);
-        let pad = " ".repeat(url_w - url_txt.chars().count());
-        let url = match &r.url {
-            Some(u) => format!("{}{pad}", ui::paint("4;34", u)),
-            None => format!("{}{pad}", ui::paint("90", url_txt)),
-        };
-
         if r.https {
-            println!("  {name} {branch} {url} {}", ui::paint("31", "HTTPS — switch to SSH"));
+            println!("  {name} {link}{branch} {}", ui::paint("31", "HTTPS — switch to SSH"));
             continue;
         }
 
@@ -140,7 +170,7 @@ fn render(rows: &[Row]) {
             None => ("—".to_string(), "37"),
         };
 
-        let mut line = format!("  {name} {branch} {url} {}", ui::paint(color, &sync));
+        let mut line = format!("  {name} {link}{branch} {}", ui::paint(color, &sync));
         if r.dirty.staged > 0 {
             line += &format!(" {}", ui::paint("32", &format!("+{}", r.dirty.staged)));
         }

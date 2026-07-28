@@ -16,6 +16,22 @@ pub fn paint(code: &str, s: &str) -> String {
     }
 }
 
+/// True when stdout is a terminal we believe renders OSC 8 hyperlinks (iTerm2,
+/// WezTerm, kitty, Ghostty, VTE ≥ 0.50, Windows Terminal, …). Piped/redirected
+/// output and unrecognized terminals report false, so we never emit a link that
+/// can't be clicked — set `FORCE_HYPERLINK=1` to override the detection. Note
+/// macOS Terminal.app does NOT support OSC 8, so it correctly reports false.
+pub fn hyperlinks() -> bool {
+    supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout)
+}
+
+/// Wrap `text` in an OSC 8 hyperlink to `url`. Only worth emitting when
+/// [`hyperlinks`] is true; a terminal that doesn't understand OSC 8 silently
+/// drops the escape and shows just `text` (no visible garbage).
+pub fn link(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
+}
+
 /// A friendly error line to stderr (red ✗), used instead of leaking raw git noise.
 pub fn err(m: &str) {
     let line = format!("✗ {m}");

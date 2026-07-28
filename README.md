@@ -57,7 +57,7 @@ codes are git's own.
 | `grove pull [args]` | `git pull` |
 | `grove push [args]` | `git push` |
 | `grove ssh [dir] [-y]` | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `lg`/`lgp`/`lgpp` can fetch them). Previews every change and asks first; `-y` skips the prompt |
-| `lg [dir]` | **Dashboard** of every repo in a folder: branch, ahead/behind, dirty counts, and its web URL — with a summary roll-up and next-step hints |
+| `lg [dir]` | **Dashboard** of every repo in a folder: branch, ahead/behind, dirty counts, and a clickable forge icon linking to its web page — with a summary roll-up and next-step hints |
 | `lgp [dir]` | **Sync**: fast-forward-pull the behind repos and push the ahead ones (only clean, in-sync ones), then show the dashboard |
 | `lgpp [dir]` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
 | `lt [dir] [-a] [-l N]` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon |
@@ -106,11 +106,15 @@ gl  = lg                    # your own shortcuts, too
 ## Behavior notes
 
 - **Dashboard (`lg`).** Fetches every SSH repo in parallel first, then shows a
-  row per repo: branch, sync state (`↑` ahead, `↓` behind, `✓` in sync, `—` no
-  upstream), dirty counts (`+` staged, `!` modified, `?` untracked), and the
-  repo's **web URL** — its GitHub/GitLab/Gitea/Forgejo page, derived from
-  `origin` whatever its transport, ready to click through from the terminal.
-  Repos that need attention are **bold**; clean, in-sync repos stay plain. The
+  row per repo: a **clickable forge icon** (GitHub/GitLab/Bitbucket, else a
+  generic git mark) linking to the repo's web page, then branch, sync state
+  (`↑` ahead, `↓` behind, `✓` in sync, `—` no upstream), and dirty counts (`+`
+  staged, `!` modified, `?` untracked). The icon is an OSC 8 terminal
+  hyperlink derived from `origin` whatever its transport, and appears **only on
+  terminals that support hyperlinks** — elsewhere the column is omitted rather
+  than left as a dead glyph (set `FORCE_HYPERLINK=1` to force it on). It uses a
+  Nerd Font icon, like `lt`. Repos that need attention are **bold**; clean,
+  in-sync repos stay plain. The
   table ends with a severity-colored roll-up (`N repos · X clean · Y dirty · Z
   to push …`) and `→` hints naming the command that clears each kind of pending
   work.
