@@ -11,6 +11,7 @@ struct Row {
     name: String,
     branch: String,
     https: bool,
+    url: Option<String>,
     ab: Option<(u32, u32)>,
     dirty: git::Dirty,
 }
@@ -51,8 +52,9 @@ fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
         .map(|r| {
             let https = git::is_https(&r.path);
             let branch = git::branch(&r.path);
+            let url = git::web_url(&r.path);
             if https {
-                return Row { name: r.name.clone(), branch, https, ab: None, dirty: git::Dirty::default() };
+                return Row { name: r.name.clone(), branch, https, url, ab: None, dirty: git::Dirty::default() };
             }
             if fetch {
                 git::fetch(&r.path);
@@ -64,6 +66,7 @@ fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
                 name: r.name.clone(),
                 branch,
                 https,
+                url,
                 ab: git::ahead_behind(&r.path),
                 dirty: git::dirty(&r.path),
             }
@@ -85,17 +88,21 @@ fn render(rows: &[Row]) {
     let width = |header: &str, f: &dyn Fn(&Row) -> usize| {
         rows.iter().map(f).max().unwrap_or(0).max(header.chars().count())
     };
+    fn url_of(r: &Row) -> &str {
+        r.url.as_deref().unwrap_or("—")
+    }
     let name_w = width("Repository", &|r| r.name.chars().count());
     let branch_w = width("Branch", &|r| r.branch.chars().count());
+    let url_w = width("URL", &|r| url_of(r).chars().count());
 
     println!();
     println!(
         "  {}",
-        ui::paint("1", &format!("{:<name_w$} {:<branch_w$} {}", "Repository", "Branch", "Status"))
+        ui::paint("1", &format!("{:<name_w$} {:<branch_w$} {:<url_w$} {}", "Repository", "Branch", "URL", "Status"))
     );
     println!(
         "  {}",
-        ui::paint("90", &format!("{} {} {}", "─".repeat(name_w), "─".repeat(branch_w), "──────"))
+        ui::paint("90", &format!("{} {} {} {}", "─".repeat(name_w), "─".repeat(branch_w), "─".repeat(url_w), "──────"))
     );
 
     for r in rows {
@@ -109,8 +116,19 @@ fn render(rows: &[Row]) {
         };
         let branch = ui::paint("34", &format!("{:<branch_w$}", r.branch));
 
+        // URL column: underline it so it reads as a link (terminals make an
+        // http(s) URL click-through); pad AFTER painting so the underline
+        // covers the URL, not the trailing blanks. A repo with no origin shows
+        // a dim dash.
+        let url_txt = url_of(r);
+        let pad = " ".repeat(url_w - url_txt.chars().count());
+        let url = match &r.url {
+            Some(u) => format!("{}{pad}", ui::paint("4;34", u)),
+            None => format!("{}{pad}", ui::paint("90", url_txt)),
+        };
+
         if r.https {
-            println!("  {name} {branch} {}", ui::paint("31", "HTTPS — switch to SSH"));
+            println!("  {name} {branch} {url} {}", ui::paint("31", "HTTPS — switch to SSH"));
             continue;
         }
 
@@ -122,7 +140,7 @@ fn render(rows: &[Row]) {
             None => ("—".to_string(), "37"),
         };
 
-        let mut line = format!("  {name} {branch} {}", ui::paint(color, &sync));
+        let mut line = format!("  {name} {branch} {url} {}", ui::paint(color, &sync));
         if r.dirty.staged > 0 {
             line += &format!(" {}", ui::paint("32", &format!("+{}", r.dirty.staged)));
         }
@@ -180,7 +198,7 @@ fn summary(rows: &[Row]) {
         hints.push("`lgp` fast-forwards the clean, behind repos".into());
     }
     if !https.is_empty() {
-        hints.push(format!("switch to SSH: {}", https.join(", ")));
+        hints.push(format!("`grove ssh` switches {} to SSH: {}", https.len(), https.join(", ")));
     }
     if diverged > 0 {
         hints.push(format!("{diverged} diverged — reconcile by hand"));

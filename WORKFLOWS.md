@@ -24,8 +24,9 @@ grove add [paths]         # git add (stages "." by default)
 grove commit <msg>        # git commit -m <msg>   (-a stage tracked, -p push after)
 grove pull                # git pull
 grove push                # git push
+grove ssh [dir] [-y]      # switch a folder's HTTPS remotes to SSH (previews & asks; -y skips)
 
-lg  [dir]                 # dashboard of every repo in a folder
+lg  [dir]                 # dashboard of every repo in a folder (incl. its web URL)
 lgp [dir]                 # pull/push the clean, in-sync repos, then show lg
 lgpp [dir]                # push every repo with unpushed commits (no pull)
 lt  [dir] [-a] [-l N]     # tree view; git repos get a git icon
@@ -143,9 +144,10 @@ gp ; gpp                   # pull ; push
 **A folder full of repos** (e.g. `~/src`):
 
 ```sh
-lg ~/src                   # dashboard: branch, ahead/behind, dirty, HTTPS flags
+lg ~/src                   # dashboard: branch, ahead/behind, dirty, web URL, HTTPS flags
 lgp ~/src                  # fast-forward the behind ones, push the ahead ones
 lgpp ~/src                 # just push everything with unpushed commits
+grove ssh ~/src            # rewrite any HTTPS remotes to SSH (previews & asks; -y to skip)
 ```
 
 `lg` ends with a severity roll-up (`N repos · X clean · Y dirty · Z to push …`)

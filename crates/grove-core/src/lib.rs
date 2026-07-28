@@ -5,6 +5,7 @@
 pub mod git;
 pub mod overview;
 pub mod passthrough;
+pub mod remote;
 pub mod sync;
 pub mod tree;
 pub mod ui;

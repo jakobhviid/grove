@@ -50,6 +50,87 @@ pub fn is_https(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Every remote of `repo` as (name, url) pairs, in `git remote -v` order.
+/// Fetch/push URLs collapse to one entry per remote (we only rewrite the URL,
+/// and `set-url` without `--push` updates both).
+pub fn remotes(repo: &Path) -> Vec<(String, String)> {
+    let Some(out) = git_out(repo, &["remote"]) else {
+        return Vec::new();
+    };
+    out.lines()
+        .filter_map(|name| {
+            let url = git_out(repo, &["remote", "get-url", name])?;
+            Some((name.to_string(), url))
+        })
+        .collect()
+}
+
+/// Convert an https remote URL to its ssh equivalent, or None if it isn't https.
+/// `https://[user[:pw]@]host[:port]/path` → `git@host:path` (scp-like), or
+/// `ssh://git@host:port/path` when a port is present (scp syntax can't carry a
+/// port). Embedded credentials (a token or `user:pw@` before the host) are
+/// dropped — ssh authenticates with your key, not a URL secret.
+pub fn https_to_ssh(url: &str) -> Option<String> {
+    let (authority, path) = url.strip_prefix("https://")?.split_once('/')?;
+    // Strip any userinfo (`token@` / `user:pw@`) that precedes the host.
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    match host.split_once(':') {
+        Some((h, port)) => Some(format!("ssh://git@{h}:{port}/{path}")),
+        None => Some(format!("git@{host}:{path}")),
+    }
+}
+
+/// The browser URL for a repo's `origin` (its GitHub/GitLab/Gitea/Forgejo page),
+/// or None if there's no origin or it can't be parsed. Whatever transport origin
+/// uses — scp-form, `ssh://`, `git://`, http(s) — maps to `https://host/path`.
+pub fn web_url(repo: &Path) -> Option<String> {
+    remote_to_web(&git_out(repo, &["remote", "get-url", "origin"])?)
+}
+
+/// Pure counterpart of [`web_url`]: map any git remote URL to its https web page.
+pub fn remote_to_web(url: &str) -> Option<String> {
+    let (host, path) = split_host_path(url)?;
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some(format!("https://{host}/{path}"))
+}
+
+/// Split a remote URL into (host, path), dropping any userinfo and `:port`.
+fn split_host_path(url: &str) -> Option<(String, String)> {
+    for scheme in ["https://", "http://", "ssh://", "git://"] {
+        if let Some(rest) = url.strip_prefix(scheme) {
+            let (authority, path) = rest.split_once('/')?;
+            let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+            let host = host.split(':').next().unwrap_or(host); // drop :port
+            return Some((host.to_string(), path.to_string()));
+        }
+    }
+    // scp-like: `[user@]host:path` (host carries no port in this form).
+    let (authority, path) = url.split_once(':')?;
+    if authority.contains('/') {
+        return None; // a local path like `../foo`, not a remote
+    }
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    Some((host.to_string(), path.to_string()))
+}
+
+/// Point `remote` at `url` (`git remote set-url`). Returns whether it succeeded.
+pub fn set_remote_url(repo: &Path, remote: &str, url: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["remote", "set-url", remote, url])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// True if the current directory is inside a git work tree.
 pub fn inside_repo() -> bool {
     Command::new("git")
@@ -119,11 +200,16 @@ pub fn dirty(repo: &Path) -> Dirty {
 }
 
 pub fn fetch(repo: &Path) {
+    // Capture (and drop) output rather than inheriting stderr: a failed fetch —
+    // unreachable remote, missing ssh key — otherwise dumps git's `fatal:` wall
+    // into the middle of the dashboard. The dashboard shows each repo's state
+    // regardless, so a quiet fetch keeps the table clean, matching grove's
+    // one-line-error style elsewhere.
     let _ = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(["fetch", "--quiet"])
-        .status();
+        .output();
 }
 
 pub fn pull(repo: &Path) -> Result<bool> {
@@ -142,4 +228,103 @@ pub fn push(repo: &Path) -> Result<bool> {
         .args(["push", "--quiet"])
         .status()?
         .success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{https_to_ssh, remote_to_web};
+
+    #[test]
+    fn rewrites_the_common_github_form() {
+        assert_eq!(
+            https_to_ssh("https://github.com/owner/repo.git").as_deref(),
+            Some("git@github.com:owner/repo.git")
+        );
+    }
+
+    #[test]
+    fn preserves_a_missing_dot_git_suffix() {
+        assert_eq!(
+            https_to_ssh("https://github.com/owner/repo").as_deref(),
+            Some("git@github.com:owner/repo")
+        );
+    }
+
+    #[test]
+    fn keeps_nested_gitlab_groups() {
+        assert_eq!(
+            https_to_ssh("https://gitlab.com/group/subgroup/repo.git").as_deref(),
+            Some("git@gitlab.com:group/subgroup/repo.git")
+        );
+    }
+
+    #[test]
+    fn drops_an_embedded_token() {
+        assert_eq!(
+            https_to_ssh("https://ghp_secret@github.com/owner/repo.git").as_deref(),
+            Some("git@github.com:owner/repo.git")
+        );
+    }
+
+    #[test]
+    fn drops_embedded_user_and_password() {
+        assert_eq!(
+            https_to_ssh("https://user:pw@gitlab.com/owner/repo.git").as_deref(),
+            Some("git@gitlab.com:owner/repo.git")
+        );
+    }
+
+    #[test]
+    fn uses_ssh_scheme_when_a_port_is_present() {
+        assert_eq!(
+            https_to_ssh("https://git.company.com:8443/owner/repo.git").as_deref(),
+            Some("ssh://git@git.company.com:8443/owner/repo.git")
+        );
+    }
+
+    #[test]
+    fn returns_none_for_non_https_or_malformed() {
+        assert_eq!(https_to_ssh("git@github.com:owner/repo.git"), None);
+        assert_eq!(https_to_ssh("ssh://git@github.com/owner/repo.git"), None);
+        assert_eq!(https_to_ssh("https://github.com"), None); // no path
+        assert_eq!(https_to_ssh("https://github.com/"), None); // empty path
+    }
+
+    #[test]
+    fn web_url_from_scp_ssh_form() {
+        assert_eq!(
+            remote_to_web("git@github.com:owner/repo.git").as_deref(),
+            Some("https://github.com/owner/repo")
+        );
+    }
+
+    #[test]
+    fn web_url_from_https_strips_git_and_credentials() {
+        assert_eq!(
+            remote_to_web("https://ghp_tok@github.com/owner/repo.git").as_deref(),
+            Some("https://github.com/owner/repo")
+        );
+    }
+
+    #[test]
+    fn web_url_from_ssh_scheme_drops_port() {
+        assert_eq!(
+            remote_to_web("ssh://git@git.company.com:2222/owner/repo.git").as_deref(),
+            Some("https://git.company.com/owner/repo")
+        );
+    }
+
+    #[test]
+    fn web_url_keeps_nested_gitlab_groups() {
+        assert_eq!(
+            remote_to_web("git@gitlab.com:group/subgroup/repo.git").as_deref(),
+            Some("https://gitlab.com/group/subgroup/repo")
+        );
+    }
+
+    #[test]
+    fn web_url_none_for_local_paths() {
+        assert_eq!(remote_to_web("../bare/repo.git"), None);
+        assert_eq!(remote_to_web("/srv/git/repo.git"), None);
+    }
 }

@@ -41,6 +41,7 @@ case "$service" in
       'commit:git commit -m'
       'pull:git pull'
       'push:git push'
+      'ssh:switch HTTPS remotes in a folder of repos to SSH'
       'setup:provision your shell (grove file + rc line)'
       'init:print shell aliases from your grove file (for eval)'
       'example:print a starter grove file'
@@ -64,6 +65,10 @@ case "$service" in
               '(-a --all)'{-a,--all}'[stage tracked changes first]' \
               '(-p --push)'{-p,--push}'[push after a successful commit]' \
               '*:message:' ;;
+          ssh)
+            _arguments \
+              '(-y --yes)'{-y,--yes}'[apply without the confirmation prompt]' \
+              '1:folder of repos:_files -/' ;;
           setup|init) _values 'shell' zsh bash fish ;;
         esac ;;
     esac

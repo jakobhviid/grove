@@ -8,6 +8,7 @@ mod completions;
 mod config;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use std::path::PathBuf;
 
 const REPO_URL: &str = "https://github.com/jakobhviid/grove";
 const AFTER_HELP: &str = concat!(
@@ -62,6 +63,14 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Switch the HTTPS remotes of every repo in a folder to SSH (so lg/lgp/lgpp can fetch them). Previews and asks before changing anything.
+    Ssh {
+        /// Folder of repositories (default: current directory).
+        dir: Option<PathBuf>,
+        /// Apply without the confirmation prompt (required for non-interactive use).
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
     /// Provision your shell: write the grove file and add the load line to your rc (idempotent). Auto-detects the shell if omitted.
     Setup { shell: Option<config::Shell> },
     /// Print shell aliases from your grove file (~/.config/grove/aliases) for eval. Add `eval "$(grove init zsh)"`.
@@ -90,6 +99,7 @@ fn main() {
         Some(Cmd::Commit { all, push, message }) => run(grove_core::passthrough::commit(all, push, &message)),
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
+        Some(Cmd::Ssh { dir, yes }) => run(grove_core::remote::run(dir.as_deref(), yes)),
         Some(Cmd::Setup { shell }) => run(config::setup(shell)),
         Some(Cmd::Init { shell }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
@@ -163,6 +173,7 @@ fn overview() {
     row("lg [dir]", "dashboard: branch, ahead/behind, dirty state per repo");
     row("lgp [dir]", "auto pull/push the clean, in-sync repos, then show lg");
     row("lgpp [dir]", "push every repo with unpushed commits (no pull)");
+    row("grove ssh [dir]", "switch HTTPS remotes to SSH (previews & asks first)");
 
     hdr("FILES");
     row("lt [dir] [-a]", "tree view; git repos get a git icon");
