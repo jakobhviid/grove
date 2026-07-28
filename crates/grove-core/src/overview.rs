@@ -16,6 +16,7 @@ const ICON_GITHUB: &str = "\u{f09b}"; //  (octocat)
 const ICON_GITLAB: &str = "\u{f296}"; //  (fox)
 const ICON_BITBUCKET: &str = "\u{f171}"; //
 const ICON_GIT: &str = "\u{e702}"; //  (generic git)
+const ICON_LINK: &str = "\u{f0c1}"; //  (chain link — the column header)
 
 /// Pick the forge glyph for a repo's https web URL (`https://host/owner/repo`).
 fn forge_icon(web_url: &str) -> &'static str {
@@ -119,30 +120,34 @@ fn render(rows: &[Row]) {
     let name_w = width("Repository", &|r| r.name.chars().count());
     let branch_w = width("Branch", &|r| r.branch.chars().count());
 
+    // Two spaces between every column — a single space read as cramped once the
+    // wide URL became a lone glyph.
+    let gap = "  ";
+
     // The forge-link column sits right after the repo name and only appears on
     // terminals that render OSC 8 hyperlinks — otherwise a lone Nerd-Font glyph
-    // would be unclickable decoration, so we drop the column entirely rather
-    // than show a dead icon. The glyph assumes a Nerd Font, like `lt` (see the
-    // brew caveat). `link_seg` reserves the 1-glyph slot: a cell plus a trailing
-    // space when the column is on, or the empty string when off (so name and
-    // branch sit a single space apart, exactly as before this column existed).
+    // would be unclickable decoration, so we drop the column entirely rather than
+    // show a dead icon. The glyph assumes a Nerd Font, like `lt` (see the brew
+    // caveat). When on, the header labels it with a chain-link glyph; each row's
+    // cell is a 1-wide forge glyph (or a blank when the repo has no origin), so
+    // it always lines up under that header. When off, the whole column vanishes.
     let links = ui::hyperlinks();
-    let link_seg = |cell: &str| if links { format!("{cell} ") } else { String::new() };
+    let link_seg = |cell: String| if links { format!("{gap}{cell}") } else { String::new() };
     let row_link = |r: &Row| match &r.url {
         // The glyph is the click target; clicking opens the repo's web page.
-        Some(u) => link_seg(&ui::link(u, &ui::paint("36", forge_icon(u)))),
+        Some(u) => link_seg(ui::link(u, &ui::paint("36", forge_icon(u)))),
         // No origin: a blank keeps the Branch column aligned under the header.
-        None => link_seg(" "),
+        None => link_seg(" ".to_string()),
     };
 
     println!();
     println!(
         "  {}",
-        ui::paint("1", &format!("{:<name_w$} {}{:<branch_w$} {}", "Repository", link_seg(" "), "Branch", "Status"))
+        ui::paint("1", &format!("{:<name_w$}{}{gap}{:<branch_w$}{gap}Status", "Repository", link_seg(ICON_LINK.to_string()), "Branch"))
     );
     println!(
         "  {}",
-        ui::paint("90", &format!("{} {}{} ──────", "─".repeat(name_w), link_seg("─"), "─".repeat(branch_w)))
+        ui::paint("90", &format!("{}{}{gap}{}{gap}──────", "─".repeat(name_w), link_seg("─".to_string()), "─".repeat(branch_w)))
     );
 
     for r in rows {
@@ -158,7 +163,7 @@ fn render(rows: &[Row]) {
         let branch = ui::paint("34", &format!("{:<branch_w$}", r.branch));
 
         if r.https {
-            println!("  {name} {link}{branch} {}", ui::paint("31", "HTTPS — switch to SSH"));
+            println!("  {name}{link}{gap}{branch}{gap}{}", ui::paint("31", "HTTPS — switch to SSH"));
             continue;
         }
 
@@ -170,7 +175,7 @@ fn render(rows: &[Row]) {
             None => ("—".to_string(), "37"),
         };
 
-        let mut line = format!("  {name} {link}{branch} {}", ui::paint(color, &sync));
+        let mut line = format!("  {name}{link}{gap}{branch}{gap}{}", ui::paint(color, &sync));
         if r.dirty.staged > 0 {
             line += &format!(" {}", ui::paint("32", &format!("+{}", r.dirty.staged)));
         }
