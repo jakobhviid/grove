@@ -46,6 +46,14 @@ fn aliases() -> Vec<(String, String)> {
     }
 }
 
+/// Default aliases whose *name* is absent from an existing grove file — the set
+/// `setup` appends when topping up. A name already present (even remapped to a
+/// different command) is left alone, so we never rewrite a line you've edited.
+fn missing_defaults(text: &str) -> Vec<(&'static str, &'static str)> {
+    let have: std::collections::HashSet<String> = parse(text).into_iter().map(|(n, _)| n).collect();
+    DEFAULTS.iter().copied().filter(|(n, _)| !have.contains(*n)).collect()
+}
+
 /// Parse `name = command` lines; ignore blanks and `#` comments.
 fn parse(text: &str) -> Vec<(String, String)> {
     text.lines()
@@ -142,10 +150,32 @@ pub fn setup(shell: Option<Shell>) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("couldn't detect your shell from $SHELL — run `grove setup zsh` (or bash/fish)"))?;
     let sh = name_of(shell);
 
-    // 1) Materialize the editable grove file so aliases have a home to be renamed in.
+    // 1) Materialize the editable grove file, then top it up. A brand-new file gets
+    //    the full annotated template; an existing one keeps every line you have and
+    //    only gains the default aliases whose *name* is missing (so an older file that
+    //    predates a default — e.g. `gp` — self-heals). Lines you've written, even
+    //    under a default's name, are never rewritten: the file is yours to edit.
     let cfg = config_path();
+    let mut added: Vec<&'static str> = Vec::new();
     let file_status = if cfg.exists() {
-        "exists"
+        let text = std::fs::read_to_string(&cfg)?;
+        let missing = missing_defaults(&text);
+        if missing.is_empty() {
+            "exists"
+        } else {
+            let mut content = text;
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str("\n# Added by `grove setup` — default git-verb aliases this file was missing:\n");
+            let w = missing.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+            for (n, c) in &missing {
+                content.push_str(&format!("{n:<w$} = {c}\n"));
+                added.push(n);
+            }
+            std::fs::write(&cfg, content)?;
+            "updated"
+        }
     } else {
         if let Some(dir) = cfg.parent() {
             std::fs::create_dir_all(dir)?;
@@ -176,6 +206,9 @@ pub fn setup(shell: Option<Shell>) -> anyhow::Result<()> {
     println!("{} — {}", paint("1;32", "grove setup"), paint("1", sh));
     println!();
     println!("  {} {} {}", paint("36", "grove file"), paint("1", &format!("{file_status:<8}")), cfg.display());
+    if !added.is_empty() {
+        println!("  {} {} topped up: {}", paint("36", &format!("{:<10}", "")), paint("1", &format!("{:<8}", "")), paint("1", &added.join(" ")));
+    }
     let rc_desc = if rc_status == "present" {
         "already configured — no change".to_string()
     } else {
@@ -183,7 +216,7 @@ pub fn setup(shell: Option<Shell>) -> anyhow::Result<()> {
     };
     println!("  {} {} {}", paint("36", &format!("{:<10}", rc_name(shell))), paint("1", &format!("{rc_status:<8}")), rc_desc);
     println!();
-    if file_status == "created" || rc_status == "added" {
+    if file_status != "exists" || rc_status == "added" {
         println!("Reload your shell to activate:  {}", paint("1", &reload_hint(shell, &rc)));
         let names: Vec<String> = aliases().into_iter().map(|(n, _)| n).collect();
         println!("{}", paint("90", &format!("Aliases: {}", names.join(" "))));
@@ -266,3 +299,35 @@ gpp = grove push
 # gl = lg
 # co = grove commit
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_defaults_reports_absent_names() {
+        // An old file that predates `gp` (and never had ga/gc/gpp): setup tops
+        // those up, but leaves the two present names — even remapped ones — alone.
+        let old = "gs  = gst\ngcp = gc --all --push\n";
+        let missing: Vec<&str> = missing_defaults(old).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(missing, vec!["ga", "gc", "gp", "gpp"]);
+    }
+
+    #[test]
+    fn missing_defaults_empty_when_all_present() {
+        assert!(missing_defaults(EXAMPLE).is_empty());
+    }
+
+    #[test]
+    fn remapped_name_is_not_reported_missing() {
+        // `gp` present but remapped to something else is still "present" — we must
+        // not rewrite a line the user has edited.
+        assert!(!missing_defaults("gp = git pull --rebase\n").iter().any(|(n, _)| *n == "gp"));
+    }
+
+    #[test]
+    fn example_template_defines_every_default() {
+        // The starter template and the built-in defaults must not drift apart.
+        assert!(missing_defaults(EXAMPLE).is_empty(), "EXAMPLE is missing a default alias");
+    }
+}
