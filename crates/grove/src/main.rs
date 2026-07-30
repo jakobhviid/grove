@@ -72,7 +72,12 @@ enum Cmd {
         yes: bool,
     },
     /// Provision your shell: write the grove file and add the load line to your rc (idempotent). Auto-detects the shell if omitted.
-    Setup { shell: Option<config::Shell> },
+    Setup {
+        shell: Option<config::Shell>,
+        /// Reconcile aliases that differ from grove's defaults without prompting (for scripts/non-interactive use).
+        #[arg(long)]
+        force: bool,
+    },
     /// Print shell aliases from your grove file (~/.config/grove/aliases) for eval. Add `eval "$(grove init zsh)"`.
     Init { shell: config::Shell },
     /// Print a starter grove file you can save to ~/.config/grove/aliases.
@@ -100,7 +105,7 @@ fn main() {
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
         Some(Cmd::Ssh { dir, yes }) => run(grove_core::remote::run(dir.as_deref(), yes)),
-        Some(Cmd::Setup { shell }) => run(config::setup(shell)),
+        Some(Cmd::Setup { shell, force }) => run(config::setup(shell, force)),
         Some(Cmd::Init { shell }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
         Some(Cmd::Completions { shell }) => completions::emit(shell),

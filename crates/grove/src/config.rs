@@ -54,6 +54,54 @@ fn missing_defaults(text: &str) -> Vec<(&'static str, &'static str)> {
     DEFAULTS.iter().copied().filter(|(n, _)| !have.contains(*n)).collect()
 }
 
+/// Default aliases whose name is present in the file but bound to a *different*
+/// command than grove's default — candidates for `setup` to reconcile. Returns
+/// `(name, current command, default command)`.
+fn divergent_defaults(text: &str) -> Vec<(&'static str, String, &'static str)> {
+    let have = parse(text);
+    DEFAULTS
+        .iter()
+        .filter_map(|(name, default)| {
+            let cur = have.iter().find(|(n, _)| n == name)?;
+            (cur.1 != *default).then(|| (*name, cur.1.clone(), *default))
+        })
+        .collect()
+}
+
+/// Rewrite the single `name = …` line to grove's default command, preserving the
+/// original left-hand side (name + spacing) so the file's formatting survives.
+fn override_alias(text: &str, name: &str, default: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        match line.split_once('=') {
+            Some((lhs, _)) if lhs.trim() == name => out.push(format!("{lhs}= {default}")),
+            _ => out.push(line.to_string()),
+        }
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Ask a yes/no question on the terminal, defaulting to no. Returns `false`
+/// without prompting when stdin/stdout isn't a TTY (e.g. piped in a script) —
+/// there `--force` is the way to apply changes non-interactively.
+fn confirm(question: &str) -> bool {
+    use std::io::Write;
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return false;
+    }
+    print!("  {question} [y/N] ");
+    let _ = io::stdout().flush();
+    let mut answer = String::new();
+    if io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+}
+
 /// Parse `name = command` lines; ignore blanks and `#` comments.
 fn parse(text: &str) -> Vec<(String, String)> {
     text.lines()
@@ -143,38 +191,65 @@ const MARKER: &str = "# grove — shell integration";
 /// rc that loads the aliases via `grove init` on every startup. Re-running is a
 /// no-op once the block is present. `init` stays the pure emitter this block
 /// calls; `setup` is the only thing that edits your files.
-pub fn setup(shell: Option<Shell>) -> anyhow::Result<()> {
+pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
     use grove_core::ui::paint;
     let shell = shell
         .or_else(detect_shell)
         .ok_or_else(|| anyhow::anyhow!("couldn't detect your shell from $SHELL — run `grove setup zsh` (or bash/fish)"))?;
     let sh = name_of(shell);
 
-    // 1) Materialize the editable grove file, then top it up. A brand-new file gets
-    //    the full annotated template; an existing one keeps every line you have and
-    //    only gains the default aliases whose *name* is missing (so an older file that
-    //    predates a default — e.g. `gp` — self-heals). Lines you've written, even
-    //    under a default's name, are never rewritten: the file is yours to edit.
+    // 1) Materialize the editable grove file, then reconcile it. A brand-new file gets
+    //    the full annotated template. An existing one is (a) topped up with any default
+    //    whose *name* is missing (so a file predating a default — e.g. `gp` — self-heals),
+    //    and (b) offered a fix for any default whose name is present but bound to a
+    //    different command. We never silently rewrite an edited line: each divergence is
+    //    confirmed interactively, or applied wholesale with `--force` for scripts.
     let cfg = config_path();
     let mut added: Vec<&'static str> = Vec::new();
+    let mut overridden: Vec<&'static str> = Vec::new();
+    let mut kept: Vec<&'static str> = Vec::new();
     let file_status = if cfg.exists() {
-        let text = std::fs::read_to_string(&cfg)?;
-        let missing = missing_defaults(&text);
-        if missing.is_empty() {
-            "exists"
-        } else {
-            let mut content = text;
-            if !content.is_empty() && !content.ends_with('\n') {
-                content.push('\n');
+        let mut text = std::fs::read_to_string(&cfg)?;
+        let mut changed = false;
+
+        // (b) Reconcile divergent aliases first, so top-up sees the final name set.
+        for (name, current, default) in divergent_defaults(&text) {
+            let apply = force
+                || confirm(&format!(
+                    "{} is `{}` — reset to grove's default `{}`?",
+                    paint("36", name),
+                    paint("1", &current),
+                    paint("1", default),
+                ));
+            if apply {
+                text = override_alias(&text, name, default);
+                overridden.push(name);
+                changed = true;
+            } else {
+                kept.push(name);
             }
-            content.push_str("\n# Added by `grove setup` — default git-verb aliases this file was missing:\n");
+        }
+
+        // (a) Top up the aliases this file never defined.
+        let missing = missing_defaults(&text);
+        if !missing.is_empty() {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str("\n# Added by `grove setup` — default git-verb aliases this file was missing:\n");
             let w = missing.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
             for (n, c) in &missing {
-                content.push_str(&format!("{n:<w$} = {c}\n"));
+                text.push_str(&format!("{n:<w$} = {c}\n"));
                 added.push(n);
             }
-            std::fs::write(&cfg, content)?;
+            changed = true;
+        }
+
+        if changed {
+            std::fs::write(&cfg, text)?;
             "updated"
+        } else {
+            "exists"
         }
     } else {
         if let Some(dir) = cfg.parent() {
@@ -206,9 +281,14 @@ pub fn setup(shell: Option<Shell>) -> anyhow::Result<()> {
     println!("{} — {}", paint("1;32", "grove setup"), paint("1", sh));
     println!();
     println!("  {} {} {}", paint("36", "grove file"), paint("1", &format!("{file_status:<8}")), cfg.display());
-    if !added.is_empty() {
-        println!("  {} {} topped up: {}", paint("36", &format!("{:<10}", "")), paint("1", &format!("{:<8}", "")), paint("1", &added.join(" ")));
-    }
+    let note = |label: &str, names: &[&str]| {
+        if !names.is_empty() {
+            println!("  {} {} {label}: {}", paint("36", &format!("{:<10}", "")), paint("1", &format!("{:<8}", "")), paint("1", &names.join(" ")));
+        }
+    };
+    note("topped up", &added);
+    note("reset to default", &overridden);
+    note("left as-is", &kept);
     let rc_desc = if rc_status == "present" {
         "already configured — no change".to_string()
     } else {
@@ -323,6 +403,30 @@ mod tests {
         // `gp` present but remapped to something else is still "present" — we must
         // not rewrite a line the user has edited.
         assert!(!missing_defaults("gp = git pull --rebase\n").iter().any(|(n, _)| *n == "gp"));
+    }
+
+    #[test]
+    fn divergent_defaults_flags_only_remapped_names() {
+        // gs is remapped (divergent); gp matches the default; ga is absent (not divergent).
+        let text = "gs = gst\ngp = grove pull\n";
+        let div = divergent_defaults(text);
+        assert_eq!(div.len(), 1);
+        assert_eq!(div[0], ("gs", "gst".to_string(), "grove status"));
+    }
+
+    #[test]
+    fn override_alias_rewrites_rhs_and_keeps_formatting() {
+        let text = "# a comment\ngs  = gst\ngcp = gc --all --push\n";
+        let out = override_alias(text, "gs", "grove status");
+        assert_eq!(out, "# a comment\ngs  = grove status\ngcp = gc --all --push\n");
+        // Untouched names and comments are preserved verbatim.
+        assert!(out.contains("# a comment"));
+        assert!(out.contains("gcp = gc --all --push"));
+    }
+
+    #[test]
+    fn override_alias_preserves_trailing_newline_absence() {
+        assert_eq!(override_alias("gp = git pull", "gp", "grove pull"), "gp = grove pull");
     }
 
     #[test]
