@@ -182,5 +182,6 @@ suite from zero.
 
 ## AI disclosure
 
-Parts of this codebase were written with the assistance of AI coding agents
-(Claude Code, opencode, and others). All changes were reviewed by the maintainer.
+Parts of this project were written with the assistance of AI coding agents (Claude
+Code, opencode, and others). All changes are reviewed by the maintainer. This is the
+single place that fact is disclosed; it is deliberately kept out of the commit history.
