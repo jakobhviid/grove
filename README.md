@@ -1,17 +1,20 @@
 # grove
 
-Your git shortcuts as **portable binaries** — install once, get the same
+Your git shortcuts as **one portable binary** — install once, get the same
 commands in **zsh, bash, or fish**, on **macOS or Linux**. `grove` bundles the
-everyday git verbs as subcommands (`status add commit pull push`, each `exec`-ing
-git) and ships three multi-repo tools with real logic — a **dashboard** across a
-folder of repos, an **auto pull/push sync**, and a **bulk push** — plus a
-self-contained **tree** view that flags which folders are git repos.
+everyday git verbs (`status add commit pull push`, each `exec`-ing git), three
+multi-repo tools with real logic — a **dashboard** across a folder of repos, an
+**auto pull/push sync**, and a **bulk push** — and a self-contained **tree**
+view that flags which folders are git repos. All are subcommands of the single
+`grove` binary.
 
-The short names you actually type (`gs ga gc gcp gp gpp`) are **shell aliases**,
-not binaries. Nothing short lands on your `PATH`, so nothing collides with other
-tools — and you can rename any that clash (say `gc`) by editing one file.
-`grove setup` provisions them for your shell in one step, and `brew upgrade
-grove` updates every machine and every shell at once.
+The short names you actually type — `gs ga gc gcp gp gpp` for the git verbs and
+`lg lgp lgpp lt` for the multi-repo/tree tools — are **shell aliases**, not
+binaries. Nothing short lands on your `PATH`, so nothing collides with other
+tools (notably `lg`, which many people alias to lazygit) — and you can rename
+any that clash by editing one file. `grove setup` provisions them for your shell
+in one step, and `brew upgrade grove` updates every machine and every shell at
+once.
 
 ## Install
 
@@ -39,36 +42,57 @@ grove setup                # writes the grove file + one line in your shell rc
 Build from source (needs Rust):
 
 ```sh
-cargo build --release      # binaries land in ./target/release/
+cargo build --release      # the grove binary lands in ./target/release/
 ```
+
+## Upgrading from 1.x
+
+In **2.0** the separate `lg` / `lgp` / `lgpp` / `lt` binaries became `grove`
+subcommands — `grove overview` / `sync` / `push-all` / `tree`. The short names
+live on as **shell aliases**: run `grove setup` once and it adds them to your
+grove file (topping up any that are missing), then open a new shell. Scripts
+should call the full subcommands (`grove overview ~/src`), which need no shell
+setup.
 
 ## Commands
 
-`grove` bundles the git verbs; `lg lgp lgpp lt` are standalone binaries. All of
-these work the moment they're on `PATH` — no shell setup. The git verbs forward
-any extra arguments straight to git, so flags, color, pager, signals, and exit
-codes are git's own.
+`grove` is one binary; everything is a subcommand. They all work the moment
+`grove` is on `PATH` — no shell setup. The git verbs forward any extra arguments
+straight to git, so flags, color, pager, signals, and exit codes are git's own.
 
-| Command | What it does |
-|---|---|
-| `grove status [args]` | `git status` — extra args forwarded |
-| `grove add [paths]` | `git add` — stages `.` by default, or the paths you pass |
-| `grove commit [-a] [-p] <msg>` | `git commit -m <msg>`; `-a`/`--all` stages tracked changes first, `-p`/`--push` pushes after a successful commit |
-| `grove pull [args]` | `git pull` |
-| `grove push [args]` | `git push` |
-| `grove ssh [dir] [-y]` | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `lg`/`lgp`/`lgpp` can fetch them). Previews every change and asks first; `-y` skips the prompt |
-| `lg [dir]` | **Dashboard** of every repo in a folder: branch, ahead/behind, dirty counts, and a clickable forge icon linking to its web page — with a summary roll-up and next-step hints |
-| `lgp [dir]` | **Sync**: fast-forward-pull the behind repos and push the ahead ones (only clean, in-sync ones), then show the dashboard |
-| `lgpp [dir]` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
-| `lt [dir] [-a] [-l N]` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon |
+| Command | Alias | What it does |
+|---|---|---|
+| `grove status [args]` | `gs` | `git status` — extra args forwarded |
+| `grove add [paths]` | `ga` | `git add` — stages `.` by default, or the paths you pass |
+| `grove commit [-a] [-p] <msg>` | `gc` | `git commit -m <msg>`; `-a`/`--all` stages tracked changes first, `-p`/`--push` pushes after a successful commit |
+| `grove pull [args]` | `gp` | `git pull` |
+| `grove push [args]` | `gpp` | `git push` |
+| `grove overview [dir]` | `lg` | **Dashboard** of every repo in a folder: branch, ahead/behind, dirty counts, and a clickable forge icon linking to its web page — with a summary roll-up and next-step hints |
+| `grove sync [dir]` | `lgp` | **Sync**: fast-forward-pull the behind repos and push the ahead ones (only clean, in-sync ones), then show the dashboard |
+| `grove push-all [dir]` | `lgpp` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
+| `grove tree [dir] [-a] [-l N]` | `lt` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon |
+| `grove ssh [dir] [-y]` | — | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `overview`/`sync`/`push-all` can fetch them). Previews every change and asks first; `-y` skips the prompt |
 
-The short aliases `grove setup` installs map onto the git verbs:
-`gs`→`grove status`, `ga`→`grove add`, `gc`→`grove commit`,
-`gcp`→`grove commit --all --push`, `gp`→`grove pull`, `gpp`→`grove push`.
+The multi-repo commands (`overview`, `sync`, `push-all`) operate on the
+**immediate subdirectories** of the folder (default: the current directory) that
+contain a `.git`. `--version`/`-V` and a man page are available; the data
+tools take **`--json`** (see below). Run bare `grove` for a one-screen overview
+of the whole suite.
 
-The multi-repo commands (`lg`, `lgp`, `lgpp`) operate on the **immediate
-subdirectories** of the folder (default: the current directory) that contain a
-`.git`. `--version`/`-V` and a man page are available on every command.
+## Machine-readable output (`--json`)
+
+The data-producing verbs — `overview`, `sync`, `push-all`, `tree` — take
+`--json`, which emits one document to stdout (progress still goes to stderr, so
+the pipe stays clean):
+
+```sh
+grove overview ~/src --json | jq '.summary'
+grove tree ~/src -l 1 --json | jq '.entries[] | select(.is_repo)'
+```
+
+`sync --json` and `push-all --json` report what they touched **and** embed the
+post-run dashboard, so an agent can act and re-check in one call. The passthrough
+git verbs have no `--json` — they `exec` git, and git owns their output.
 
 ## Shell aliases
 
@@ -81,9 +105,11 @@ grove setup zsh            # or name it explicitly (zsh | bash | fish)
 ```
 
 `grove setup` writes `~/.config/grove/aliases` (a starter grove file) if it's
-missing, and appends **one idempotent, marker-delimited block** to your shell rc
-(`~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`) that loads the aliases
-on every startup. Re-running never adds a second block. Then open a new shell.
+missing — and, on an existing file, tops up any default alias it's missing (this
+is how a 1.x file gains `lg`/`lgp`/`lgpp`/`lt`). It also appends **one
+idempotent, marker-delimited block** to your shell rc (`~/.zshrc`, `~/.bashrc`,
+or `~/.config/fish/config.fish`) that loads the aliases on every startup.
+Re-running never adds a second block. Then open a new shell.
 
 Prefer to manage your own dotfiles? `grove init <shell>` just **prints** the
 alias lines (it changes nothing) — the block `grove setup` writes simply calls
@@ -99,58 +125,60 @@ starter). Edit it to rename a clashing alias or add your own:
 
 ```
 gc  = grove commit          # rename to `gk` if `gc` clashes on your system
-gcp = grove commit --all --push
-gl  = lg                    # your own shortcuts, too
+lg  = grove overview        # rename if you use `lg` for lazygit
+co  = grove commit          # your own shortcuts, too
 ```
 
 ## Behavior notes
 
-- **Dashboard (`lg`).** Fetches every SSH repo in parallel first, then shows a
-  row per repo: a **clickable forge icon** (GitHub/GitLab/Bitbucket, else a
-  generic git mark) linking to the repo's web page, then branch, sync state
-  (`↑` ahead, `↓` behind, `✓` in sync, `—` no upstream), and dirty counts (`+`
-  staged, `!` modified, `?` untracked). The icon is an OSC 8 terminal
-  hyperlink derived from `origin` whatever its transport, and appears **only on
-  terminals that support hyperlinks** — elsewhere the column is omitted rather
-  than left as a dead glyph (set `FORCE_HYPERLINK=1` to force it on). It uses a
-  Nerd Font icon, like `lt`. Repos that need attention are **bold**; clean,
-  in-sync repos stay plain. The
-  table ends with a severity-colored roll-up (`N repos · X clean · Y dirty · Z
-  to push …`) and `→` hints naming the command that clears each kind of pending
-  work.
+- **Dashboard (`grove overview`, alias `lg`).** Fetches every SSH repo in
+  parallel first, then shows a row per repo: a **clickable forge icon**
+  (GitHub/GitLab/Bitbucket, else a generic git mark) linking to the repo's web
+  page, then branch, sync state (`↑` ahead, `↓` behind, `✓` in sync, `—` no
+  upstream), and dirty counts (`+` staged, `!` modified, `?` untracked). The icon
+  is an OSC 8 terminal hyperlink derived from `origin` whatever its transport,
+  and appears **only on terminals that support hyperlinks** — elsewhere the
+  column is omitted rather than left as a dead glyph (set `FORCE_HYPERLINK=1` to
+  force it on). It uses a Nerd Font icon, like `grove tree`. Repos that need
+  attention are **bold**; clean, in-sync repos stay plain. The table ends with a
+  severity-colored roll-up (`N repos · X clean · Y dirty · Z to push …`) and `→`
+  hints naming the command that clears each kind of pending work.
 - **HTTPS remotes are flagged, not fetched.** Any repo whose `origin` is still
   on HTTPS is called out and skipped during fetch/sync — run **`grove ssh`** to
   rewrite them all to SSH (it previews each change and asks before touching
   anything; embedded tokens are dropped, ports become `ssh://`, then it fetches
   and reprints the dashboard so the switch is confirmed).
-- **Sync is conservative.** `lgp` only touches clean repos with an upstream:
-  it fast-forward-pulls the ones strictly behind and pushes the ones strictly
-  ahead. Dirty, diverged, HTTPS, and upstream-less repos are left untouched.
-  `lgpp` pushes every repo strictly ahead — it never pulls and does not require a
-  clean worktree, and skips diverged repos a plain push would reject.
-- **Tree (`lt`)** has no external dependencies (no eza), lists directories
-  before files, and hides dotfiles unless `-a` is given.
-- **Nerd Font icons** — use a Nerd Font for `lt` to render correctly.
+- **Sync is conservative.** `grove sync` only touches clean repos with an
+  upstream: it fast-forward-pulls the ones strictly behind and pushes the ones
+  strictly ahead. Dirty, diverged, HTTPS, and upstream-less repos are left
+  untouched. `grove push-all` pushes every repo strictly ahead — it never pulls
+  and does not require a clean worktree, and skips diverged repos a plain push
+  would reject.
+- **Tree (`grove tree`, alias `lt`)** has no external dependencies (no eza),
+  lists directories before files, and hides dotfiles unless `-a` is given.
+- **Nerd Font icons** — use a Nerd Font for `grove tree` and the dashboard's
+  forge links to render correctly.
 - The git verbs `exec` git in place (leaving no wrapper process); outside a repo
   they print a friendly one-line error instead of git's `fatal:` wall of text.
 
 ## Completions
 
 Homebrew and the `curl` installer place a zsh completion file (`_grove`) covering
-`grove` and `lg lgp lgpp lt`. The short aliases inherit grove's completion
-automatically, and the git verbs delegate to zsh's own git completion — so
+`grove` and all its subcommands. The short aliases inherit grove's completion
+automatically (zsh resolves `alias lg='grove overview'` and completes it as
+`grove overview`), and the git verbs delegate to zsh's own git completion — so
 `grove status` (and `gs`) tab-complete exactly like `git status`. bash/fish get
 clap-generated completions for `grove`.
 
 ## For scripts & agents
 
-The full commands need no shell state, so **automation should call them
+The full subcommands need no shell state, so **automation should call them
 directly** (aliases aren't expanded in scripts anyway): `grove commit -a -p
-"msg"`, `lgpp ~/repos`, and so on. `grove setup` is safe to run unattended
-(idempotent, no prompts). `grove --llm` prints a single self-contained,
-machine-readable guide — the command reference, a WORKFLOWS section (including
-unattended provisioning), and this README — so an agent can drive the suite from
-zero.
+"msg"`, `grove overview ~/repos --json`, `grove push-all ~/repos`, and so on.
+`grove setup` is safe to run unattended (idempotent, no prompts). `grove --llm`
+prints a single self-contained, machine-readable guide — the command reference,
+ARCHITECTURE, a WORKFLOWS section, and this README — so an agent can drive the
+suite from zero.
 
 ## AI disclosure
 

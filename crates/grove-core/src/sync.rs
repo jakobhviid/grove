@@ -1,22 +1,45 @@
-//! `sync` (alias lgp): for every clean, in-sync repo under a folder, fast-forward
-//! pull the ones that are only behind and push the ones that are only ahead —
-//! then print the overview. Repos that are dirty, diverged, https, or without an
-//! upstream are left untouched.
+//! `sync` (the `lgp` alias): for every clean, in-sync repo under a folder,
+//! fast-forward pull the ones that are only behind and push the ones that are
+//! only ahead — then show the overview. Repos that are dirty, diverged, https,
+//! or without an upstream are left untouched. `push_all` (the `lgpp` alias) is
+//! the push-only variant.
+//!
+//! Both return a serializable report (the machine result behind `--json`) that
+//! embeds the post-run [`overview::Report`]; [`render_human`]/[`render_push`]
+//! paint them.
 use crate::{git, overview, ui};
 use anyhow::Result;
 use rayon::prelude::*;
+use serde::Serialize;
 use std::path::Path;
 
-pub fn run(dir: Option<&Path>) -> Result<()> {
+/// One repo `sync` touched, and which direction.
+#[derive(Serialize)]
+pub struct Synced {
+    pub name: String,
+    pub op: &'static str, // "pull" | "push"
+}
+
+/// What `sync` did, plus the dashboard as it stands afterwards.
+#[derive(Serialize)]
+pub struct SyncReport {
+    pub synced: Vec<Synced>,
+    pub overview: overview::Report,
+}
+
+/// What `push_all` pushed, plus the dashboard afterwards.
+#[derive(Serialize)]
+pub struct PushReport {
+    pub pushed: Vec<String>,
+    pub overview: overview::Report,
+}
+
+pub fn run(dir: Option<&Path>) -> Result<SyncReport> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
     let repos = git::discover(dir);
-    if repos.is_empty() {
-        println!("No git repositories in {}", dir.display());
-        return Ok(());
-    }
 
     // Fetch every ssh repo in parallel, with a progress bar — this is the slow
     // part, since each fetch is a network round-trip.
@@ -56,7 +79,8 @@ pub fn run(dir: Option<&Path>) -> Result<()> {
         .collect();
 
     // The pull/push is the part that actually transfers data (and runs quiet),
-    // so give it its own progress bar, then report what was synced.
+    // so give it its own progress bar.
+    let mut synced: Vec<Synced> = Vec::new();
     if !to_sync.is_empty() {
         let pb = ui::bar(to_sync.len() as u64, "Syncing");
         to_sync.par_iter().for_each(|(r, op)| {
@@ -67,34 +91,43 @@ pub fn run(dir: Option<&Path>) -> Result<()> {
             pb.inc(1);
         });
         pb.finish_and_clear();
-        for (r, op) in &to_sync {
-            let arrow = match op {
-                Op::Pull => "↓",
-                Op::Push => "↑",
-            };
-            println!("  {} {}", ui::paint("32", arrow), r.name);
-        }
+        synced = to_sync
+            .iter()
+            .map(|(r, op)| Synced {
+                name: r.name.clone(),
+                op: match op {
+                    Op::Pull => "pull",
+                    Op::Push => "push",
+                },
+            })
+            .collect();
     }
 
-    // sync already fetched above — render without fetching again (no 2nd bar).
-    overview::run_no_fetch(Some(dir))
+    // We already fetched above, so collect the post-sync state without a second
+    // fetch (no duplicate "Fetching" bar).
+    let overview = overview::collect(Some(dir), false)?;
+    Ok(SyncReport { synced, overview })
 }
 
-/// `push_all` (alias lgpp): push every repo under a folder that has unpushed
-/// commits — strictly ahead of its upstream. Unlike `sync`/lgp it never pulls
-/// and does NOT require a clean worktree (pushing committed work is safe even
-/// with uncommitted changes present). Repos that are up-to-date, behind,
+pub fn render_human(report: &SyncReport) {
+    for item in &report.synced {
+        let arrow = if item.op == "pull" { "↓" } else { "↑" };
+        println!("  {} {}", ui::paint("32", arrow), item.name);
+    }
+    overview::render_human(&report.overview);
+}
+
+/// `push_all` (the `lgpp` alias): push every repo under a folder that has
+/// unpushed commits — strictly ahead of its upstream. Unlike `sync` it never
+/// pulls and does NOT require a clean worktree (pushing committed work is safe
+/// even with uncommitted changes present). Repos that are up-to-date, behind,
 /// diverged, https, or have no upstream are left alone.
-pub fn push_all(dir: Option<&Path>) -> Result<()> {
+pub fn push_all(dir: Option<&Path>) -> Result<PushReport> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
     let repos = git::discover(dir);
-    if repos.is_empty() {
-        println!("No git repositories in {}", dir.display());
-        return Ok(());
-    }
 
     // Fetch first so ahead/behind is accurate (don't push into a diverged remote).
     let to_fetch: Vec<_> = repos.iter().filter(|r| !git::is_https(&r.path)).collect();
@@ -117,19 +150,28 @@ pub fn push_all(dir: Option<&Path>) -> Result<()> {
         })
         .collect();
 
-    if to_push.is_empty() {
-        println!("{}", ui::paint("90", "Nothing to push."));
-    } else {
+    let mut pushed: Vec<String> = Vec::new();
+    if !to_push.is_empty() {
         let pb = ui::bar(to_push.len() as u64, "Pushing");
         to_push.par_iter().for_each(|r| {
             let _ = git::push(&r.path);
             pb.inc(1);
         });
         pb.finish_and_clear();
-        for r in &to_push {
-            println!("  {} {}", ui::paint("32", "↑"), r.name);
-        }
+        pushed = to_push.iter().map(|r| r.name.clone()).collect();
     }
 
-    overview::run_no_fetch(Some(dir))
+    let overview = overview::collect(Some(dir), false)?;
+    Ok(PushReport { pushed, overview })
+}
+
+pub fn render_push(report: &PushReport) {
+    if report.pushed.is_empty() {
+        println!("{}", ui::paint("90", "Nothing to push."));
+    } else {
+        for name in &report.pushed {
+            println!("  {} {}", ui::paint("32", "↑"), name);
+        }
+    }
+    overview::render_human(&report.overview);
 }

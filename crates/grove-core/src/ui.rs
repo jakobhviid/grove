@@ -1,15 +1,29 @@
 //! Tiny color helper, a friendly error line, and a progress bar. All respect
 //! NO_COLOR and non-TTY output, so piping stays clean and scriptable.
+//!
+//! The color decision is made **once per stream** via `OnceLock` (env + TTY read
+//! exactly once, so every call agrees) and keyed to the stream the helper writes
+//! to: `paint` colors stdout content, so it gates on stdout; `err` writes to
+//! stderr, so it gates on stderr.
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{self, IsTerminal};
+use std::sync::OnceLock;
 
-fn no_color() -> bool {
-    std::env::var_os("NO_COLOR").is_some()
+/// Whether to emit ANSI on stdout — `NO_COLOR` unset AND stdout is a terminal.
+fn stdout_color() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal())
+}
+
+/// Whether to emit ANSI on stderr — `NO_COLOR` unset AND stderr is a terminal.
+fn stderr_color() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && io::stderr().is_terminal())
 }
 
 /// Wrap `s` in an ANSI SGR code (e.g. "1;34"), unless color is off / stdout isn't a TTY.
 pub fn paint(code: &str, s: &str) -> String {
-    if !no_color() && io::stdout().is_terminal() {
+    if stdout_color() {
         format!("\x1b[{code}m{s}\x1b[0m")
     } else {
         s.to_string()
@@ -35,7 +49,7 @@ pub fn link(url: &str, text: &str) -> String {
 /// A friendly error line to stderr (red ✗), used instead of leaking raw git noise.
 pub fn err(m: &str) {
     let line = format!("✗ {m}");
-    if !no_color() && io::stderr().is_terminal() {
+    if stderr_color() {
         eprintln!("\x1b[1;31m{line}\x1b[0m");
     } else {
         eprintln!("{line}");

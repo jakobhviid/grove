@@ -14,10 +14,11 @@ pub enum Shell {
 }
 
 /// Built-in defaults emitted when there's no grove file yet: short names for the
-/// git verbs, mapped to `grove` subcommands. These are aliases, not binaries, so
-/// nothing short lands on PATH to collide with other tools — and each only
-/// shadows at your interactive prompt, never in scripts. Rename any that clash on
-/// your system (e.g. `gc`) by editing the grove file; that's the whole point.
+/// git verbs and the multi-repo/tree tools, mapped to `grove` subcommands. These
+/// are aliases, not binaries, so nothing short lands on PATH to collide with
+/// other tools (notably `lg` vs lazygit) — and each only shadows at your
+/// interactive prompt, never in scripts. Rename any that clash on your system
+/// (e.g. `gc` or `lg`) by editing the grove file; that's the whole point.
 const DEFAULTS: &[(&str, &str)] = &[
     ("gs", "grove status"),
     ("ga", "grove add"),
@@ -25,6 +26,10 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("gcp", "grove commit --all --push"),
     ("gp", "grove pull"),
     ("gpp", "grove push"),
+    ("lg", "grove overview"),
+    ("lgp", "grove sync"),
+    ("lgpp", "grove push-all"),
+    ("lt", "grove tree"),
 ];
 
 /// Read an environment variable as a path, treating unset **and empty** the
@@ -375,9 +380,16 @@ gcp = grove commit --all --push
 gp  = grove pull
 gpp = grove push
 
-# Add your own, e.g. short names for the multi-repo tools:
-# gl = lg
+# The multi-repo / tree tools. `lg` in particular clashes with lazygit — rename
+# it (or any of these) if you already use that name for something else.
+lg   = grove overview
+lgp  = grove sync
+lgpp = grove push-all
+lt   = grove tree
+
+# Add your own, too:
 # co = grove commit
+# st = grove status
 ";
 
 #[cfg(test)]
@@ -386,11 +398,13 @@ mod tests {
 
     #[test]
     fn missing_defaults_reports_absent_names() {
-        // An old file that predates `gp` (and never had ga/gc/gpp): setup tops
-        // those up, but leaves the two present names — even remapped ones — alone.
+        // An old file that predates most defaults (only gs + gcp present): setup
+        // tops up every absent default — including the multi-repo aliases a file
+        // written before the 2.0 collapse never had — but leaves the two present
+        // names, even remapped ones, alone.
         let old = "gs  = gst\ngcp = gc --all --push\n";
         let missing: Vec<&str> = missing_defaults(old).into_iter().map(|(n, _)| n).collect();
-        assert_eq!(missing, vec!["ga", "gc", "gp", "gpp"]);
+        assert_eq!(missing, vec!["ga", "gc", "gp", "gpp", "lg", "lgp", "lgpp", "lt"]);
     }
 
     #[test]

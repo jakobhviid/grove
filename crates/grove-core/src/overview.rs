@@ -1,17 +1,22 @@
-//! `overview` (alias lg): a one-screen dashboard of every repo directly under a
-//! folder — branch, ahead/behind vs upstream, and staged/modified/untracked
-//! counts. Repos are fetched in parallel first; https remotes are flagged (not
-//! fetched) so you can switch them to SSH.
+//! `overview` (the `lg` alias): a one-screen dashboard of every repo directly
+//! under a folder — branch, ahead/behind vs upstream, and staged/modified/
+//! untracked counts. Repos are fetched in parallel first; https remotes are
+//! flagged (not fetched) so you can switch them to SSH.
+//!
+//! Split in two so the CLI can render either surface without the logic knowing
+//! which: [`collect`] gathers the state into a serializable [`Report`] (this is
+//! the machine result behind `--json`), and [`render_human`] paints the table.
 use crate::{git, ui};
 use anyhow::Result;
 use rayon::prelude::*;
+use serde::Serialize;
 use std::path::Path;
 
 // Nerd Font forge marks for the clickable link column. Known SaaS hosts get
 // their brand glyph; self-hosted / Gitea / Forgejo / Codeberg / GitHub
 // Enterprise / anything else falls back to a generic git logo (their domains
 // are arbitrary, so the host can't identify them). Assumes a Nerd Font, exactly
-// as `lt` does.
+// as `tree` does.
 const ICON_GITHUB: &str = "\u{f09b}"; //  (octocat)
 const ICON_GITLAB: &str = "\u{f296}"; //  (fox)
 const ICON_BITBUCKET: &str = "\u{f171}"; //
@@ -36,36 +41,69 @@ fn forge_icon(web_url: &str) -> &'static str {
     }
 }
 
-struct Row {
-    name: String,
-    branch: String,
-    https: bool,
-    url: Option<String>,
-    ab: Option<(u32, u32)>,
-    dirty: git::Dirty,
+/// One repo's state — the row of the dashboard, and one element of the `--json`
+/// document. `ahead`/`behind` are both `null` when there is no upstream.
+#[derive(Serialize)]
+pub struct RepoStatus {
+    pub name: String,
+    pub branch: String,
+    /// origin is still on https (flagged, never fetched).
+    pub https: bool,
+    /// browser URL for origin, if it resolves to one.
+    pub web_url: Option<String>,
+    pub ahead: Option<u32>,
+    pub behind: Option<u32>,
+    pub staged: u32,
+    pub modified: u32,
+    pub untracked: u32,
 }
 
-pub fn run(dir: Option<&Path>) -> Result<()> {
-    run_inner(dir, true)
+impl RepoStatus {
+    fn dirty(&self) -> bool {
+        self.staged > 0 || self.modified > 0 || self.untracked > 0
+    }
+
+    /// A fully-clean, in-sync ssh repo — nothing needs attention, so the human
+    /// table leaves it un-bolded.
+    fn calm(&self) -> bool {
+        !self.https && !self.dirty() && matches!((self.ahead, self.behind), (Some(0), Some(0)))
+    }
 }
 
-/// Like `run`, but assumes the caller already fetched (used by `sync`), so it
-/// skips the fetch and its progress bar and just renders current state — avoids
-/// a second fetch + second "Fetching" bar during `lgp`.
-pub fn run_no_fetch(dir: Option<&Path>) -> Result<()> {
-    run_inner(dir, false)
+/// Roll-up counts under the table. Every repo lands in exactly one sync bucket
+/// (`clean`/`ahead`/`behind`/`diverged`/`https`/`no_upstream`); `dirty` is an
+/// independent overlay (a repo can be both dirty and ahead).
+#[derive(Serialize)]
+pub struct Summary {
+    pub repos: usize,
+    pub clean: usize,
+    pub dirty: usize,
+    pub ahead: usize,
+    pub behind: usize,
+    pub diverged: usize,
+    pub https: usize,
+    pub no_upstream: usize,
 }
 
-fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
+/// The whole dashboard: the folder, every repo under it, and the roll-up. This
+/// is what `--json` serializes.
+#[derive(Serialize)]
+pub struct Report {
+    pub dir: String,
+    pub repos: Vec<RepoStatus>,
+    pub summary: Summary,
+}
+
+/// Discover the repos directly under `dir` and read each one's state, fetching
+/// the ssh repos first in parallel when `fetch`. Pure data: prints nothing but
+/// the shared "Fetching" progress bar (stderr). Render with [`render_human`], or
+/// serialize the [`Report`] as JSON.
+pub fn collect(dir: Option<&Path>, fetch: bool) -> Result<Report> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
     let repos = git::discover(dir);
-    if repos.is_empty() {
-        println!("No git repositories in {}", dir.display());
-        return Ok(());
-    }
 
     // Size the bar to the repos we'll actually fetch (ssh only — https are
     // flagged, not fetched), so the count reflects real work: "Fetching 3/8".
@@ -76,14 +114,24 @@ fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
         None
     };
 
-    let rows: Vec<Row> = repos
+    let repos: Vec<RepoStatus> = repos
         .par_iter()
         .map(|r| {
             let https = git::is_https(&r.path);
             let branch = git::branch(&r.path);
-            let url = git::web_url(&r.path);
+            let web_url = git::web_url(&r.path);
             if https {
-                return Row { name: r.name.clone(), branch, https, url, ab: None, dirty: git::Dirty::default() };
+                return RepoStatus {
+                    name: r.name.clone(),
+                    branch,
+                    https,
+                    web_url,
+                    ahead: None,
+                    behind: None,
+                    staged: 0,
+                    modified: 0,
+                    untracked: 0,
+                };
             }
             if fetch {
                 git::fetch(&r.path);
@@ -91,13 +139,18 @@ fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
                     pb.inc(1);
                 }
             }
-            Row {
+            let ab = git::ahead_behind(&r.path);
+            let dirty = git::dirty(&r.path);
+            RepoStatus {
                 name: r.name.clone(),
                 branch,
                 https,
-                url,
-                ab: git::ahead_behind(&r.path),
-                dirty: git::dirty(&r.path),
+                web_url,
+                ahead: ab.map(|(ahead, _)| ahead),
+                behind: ab.map(|(_, behind)| behind),
+                staged: dirty.staged,
+                modified: dirty.modified,
+                untracked: dirty.untracked,
             }
         })
         .collect();
@@ -105,17 +158,52 @@ fn run_inner(dir: Option<&Path>, fetch: bool) -> Result<()> {
         pb.finish_and_clear();
     }
 
-    render(&rows);
-    Ok(())
+    let summary = summarize(&repos);
+    Ok(Report { dir: dir.display().to_string(), repos, summary })
 }
 
-fn render(rows: &[Row]) {
+/// Tally every repo into the roll-up buckets. Kept in core (it's classification
+/// logic, not rendering) so `--json` and the human roll-up agree by construction.
+fn summarize(repos: &[RepoStatus]) -> Summary {
+    let mut summary = Summary { repos: repos.len(), clean: 0, dirty: 0, ahead: 0, behind: 0, diverged: 0, https: 0, no_upstream: 0 };
+    for repo in repos {
+        if repo.https {
+            summary.https += 1;
+            continue;
+        }
+        if repo.dirty() {
+            summary.dirty += 1;
+        }
+        match (repo.ahead, repo.behind) {
+            (Some(ahead), Some(behind)) if ahead > 0 && behind > 0 => summary.diverged += 1,
+            (Some(ahead), _) if ahead > 0 => summary.ahead += 1,
+            (_, Some(behind)) if behind > 0 => summary.behind += 1,
+            (Some(_), Some(_)) => {
+                if !repo.dirty() {
+                    summary.clean += 1;
+                }
+            }
+            _ => summary.no_upstream += 1,
+        }
+    }
+    summary
+}
+
+/// Paint the dashboard for a human: the aligned, colored table plus the roll-up
+/// and next-step hints. `--json` callers skip this and serialize the [`Report`].
+pub fn render_human(report: &Report) {
+    if report.repos.is_empty() {
+        println!("No git repositories in {}", report.dir);
+        return;
+    }
+    let rows = &report.repos;
+
     // Size the Repository and Branch columns to their widest entry (never below
     // the header) so a long name like `opencode-dynamic-custom-providers` can't
     // shove the rest of the row out of alignment. Count chars, not bytes, so a
     // Danish æ/ø/å in a name lines up the same as an ASCII one.
-    let width = |header: &str, f: &dyn Fn(&Row) -> usize| {
-        rows.iter().map(f).max().unwrap_or(0).max(header.chars().count())
+    let width = |header: &str, field: &dyn Fn(&RepoStatus) -> usize| {
+        rows.iter().map(field).max().unwrap_or(0).max(header.chars().count())
     };
     let name_w = width("Repository", &|r| r.name.chars().count());
     let branch_w = width("Branch", &|r| r.branch.chars().count());
@@ -127,15 +215,15 @@ fn render(rows: &[Row]) {
     // The forge-link column sits right after the repo name and only appears on
     // terminals that render OSC 8 hyperlinks — otherwise a lone Nerd-Font glyph
     // would be unclickable decoration, so we drop the column entirely rather than
-    // show a dead icon. The glyph assumes a Nerd Font, like `lt` (see the brew
+    // show a dead icon. The glyph assumes a Nerd Font, like `tree` (see the brew
     // caveat). When on, the header labels it with a chain-link glyph; each row's
     // cell is a 1-wide forge glyph (or a blank when the repo has no origin), so
     // it always lines up under that header. When off, the whole column vanishes.
     let links = ui::hyperlinks();
     let link_seg = |cell: String| if links { format!("{gap}{cell}") } else { String::new() };
-    let row_link = |r: &Row| match &r.url {
+    let row_link = |r: &RepoStatus| match &r.web_url {
         // The glyph is the click target; clicking opens the repo's web page.
-        Some(u) => link_seg(ui::link(u, &ui::paint("36", forge_icon(u)))),
+        Some(url) => link_seg(ui::link(url, &ui::paint("36", forge_icon(url)))),
         // No origin: a blank keeps the Branch column aligned under the header.
         None => link_seg(" ".to_string()),
     };
@@ -154,10 +242,9 @@ fn render(rows: &[Row]) {
         // A fully-clean, in-sync ssh repo needs no attention. Rather than dim the
         // clean rows (which vanish on a dark terminal), keep them normal and make
         // the rows that DO need attention **bold**, so the eye lands on them.
-        let calm = !r.https && !r.dirty.any() && matches!(r.ab, Some((0, 0)));
         let name = {
             let padded = format!("{:<name_w$}", r.name);
-            if calm { padded } else { ui::paint("1", &padded) }
+            if r.calm() { padded } else { ui::paint("1", &padded) }
         };
         let link = row_link(r);
         let branch = ui::paint("34", &format!("{:<branch_w$}", r.branch));
@@ -167,78 +254,68 @@ fn render(rows: &[Row]) {
             continue;
         }
 
-        let (sync, color) = match r.ab {
-            Some((a, b)) if a > 0 && b > 0 => (format!("↑{a} ↓{b}"), "33"),
-            Some((a, _)) if a > 0 => (format!("↑{a}"), "33"),
-            Some((_, b)) if b > 0 => (format!("↓{b}"), "31"),
-            Some(_) => ("✓".to_string(), "32"),
-            None => ("—".to_string(), "37"),
+        let (sync, color) = match (r.ahead, r.behind) {
+            (Some(ahead), Some(behind)) if ahead > 0 && behind > 0 => (format!("↑{ahead} ↓{behind}"), "33"),
+            (Some(ahead), _) if ahead > 0 => (format!("↑{ahead}"), "33"),
+            (_, Some(behind)) if behind > 0 => (format!("↓{behind}"), "31"),
+            (Some(_), Some(_)) => ("✓".to_string(), "32"),
+            _ => ("—".to_string(), "37"),
         };
 
         let mut line = format!("  {name}{link}{gap}{branch}{gap}{}", ui::paint(color, &sync));
-        if r.dirty.staged > 0 {
-            line += &format!(" {}", ui::paint("32", &format!("+{}", r.dirty.staged)));
+        if r.staged > 0 {
+            line += &format!(" {}", ui::paint("32", &format!("+{}", r.staged)));
         }
-        if r.dirty.modified > 0 {
-            line += &format!(" {}", ui::paint("33", &format!("!{}", r.dirty.modified)));
+        if r.modified > 0 {
+            line += &format!(" {}", ui::paint("33", &format!("!{}", r.modified)));
         }
-        if r.dirty.untracked > 0 {
-            line += &format!(" {}", ui::paint("34", &format!("?{}", r.dirty.untracked)));
+        if r.untracked > 0 {
+            line += &format!(" {}", ui::paint("34", &format!("?{}", r.untracked)));
         }
         println!("{line}");
     }
-    summary(rows);
+    render_summary(report);
     println!();
 }
 
 /// A one-line roll-up under the table — counts toned by severity — plus the exact
 /// command to clear each kind of pending work. This is the at-a-glance triage.
-fn summary(rows: &[Row]) {
-    let https: Vec<&str> = rows.iter().filter(|r| r.https).map(|r| r.name.as_str()).collect();
-    let (mut clean, mut dirty, mut ahead, mut behind, mut diverged, mut noup) = (0, 0, 0, 0, 0, 0);
-    for r in rows.iter().filter(|r| !r.https) {
-        if r.dirty.any() {
-            dirty += 1;
-        }
-        match r.ab {
-            Some((a, b)) if a > 0 && b > 0 => diverged += 1,
-            Some((a, _)) if a > 0 => ahead += 1,
-            Some((_, b)) if b > 0 => behind += 1,
-            Some(_) => { if !r.dirty.any() { clean += 1 } }
-            None => noup += 1,
-        }
-    }
+fn render_summary(report: &Report) {
+    let summary = &report.summary;
+    let https_names: Vec<&str> = report.repos.iter().filter(|r| r.https).map(|r| r.name.as_str()).collect();
 
     let sep = ui::paint("90", " · ");
-    let mut parts = vec![ui::paint("1", &format!("{} repos", rows.len()))];
-    let mut add = |cnt: usize, label: &str, color: &str| {
-        if cnt > 0 {
-            parts.push(ui::paint(color, &format!("{cnt} {label}")));
+    let mut parts = vec![ui::paint("1", &format!("{} repos", summary.repos))];
+    let mut add = |count: usize, label: &str, color: &str| {
+        if count > 0 {
+            parts.push(ui::paint(color, &format!("{count} {label}")));
         }
     };
-    add(clean, "clean", "32");
-    add(dirty, "dirty", "33");
-    add(ahead, "to push", "33");
-    add(behind, "to pull", "31");
-    add(diverged, "diverged", "31");
-    add(https.len(), "https", "31");
-    add(noup, "no upstream", "90");
+    add(summary.clean, "clean", "32");
+    add(summary.dirty, "dirty", "33");
+    add(summary.ahead, "to push", "33");
+    add(summary.behind, "to pull", "31");
+    add(summary.diverged, "diverged", "31");
+    add(summary.https, "https", "31");
+    add(summary.no_upstream, "no upstream", "90");
     println!("\n  {}", parts.join(&sep));
 
+    // Hints name the real subcommands (they always work); the short aliases
+    // lg/lgp/lgpp are only present after `grove setup`.
     let mut hints: Vec<String> = Vec::new();
-    if ahead > 0 {
-        hints.push(format!("`lgpp` pushes {ahead} with unpushed commits"));
+    if summary.ahead > 0 {
+        hints.push(format!("`grove push-all` pushes {} with unpushed commits", summary.ahead));
     }
-    if behind > 0 {
-        hints.push("`lgp` fast-forwards the clean, behind repos".into());
+    if summary.behind > 0 {
+        hints.push("`grove sync` fast-forwards the clean, behind repos".into());
     }
-    if !https.is_empty() {
-        hints.push(format!("`grove ssh` switches {} to SSH: {}", https.len(), https.join(", ")));
+    if !https_names.is_empty() {
+        hints.push(format!("`grove ssh` switches {} to SSH: {}", https_names.len(), https_names.join(", ")));
     }
-    if diverged > 0 {
-        hints.push(format!("{diverged} diverged — reconcile by hand"));
+    if summary.diverged > 0 {
+        hints.push(format!("{} diverged — reconcile by hand", summary.diverged));
     }
-    for h in hints {
-        println!("  {} {}", ui::paint("36", "→"), h);
+    for hint in hints {
+        println!("  {} {}", ui::paint("36", "→"), hint);
     }
 }

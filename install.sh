@@ -66,4 +66,4 @@ case ":$PATH:" in
        echo "      export PATH=\"${BIN_DIR}:\$PATH\"" ;;
 esac
 
-echo "Done. Run \`${NAME}\` for an overview, or \`${NAME} setup\` to enable the short aliases (gs ga gc …)."
+echo "Done. Run \`${NAME}\` for an overview, or \`${NAME} setup\` to enable the short aliases (gs ga gc … and lg lgp lgpp lt)."
