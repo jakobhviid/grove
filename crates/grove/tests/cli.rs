@@ -116,6 +116,60 @@ fn configure_sets_gets_and_lists_settings() {
 }
 
 #[test]
+fn default_dir_fallback_runs_in_the_configured_folder_with_a_note() {
+    // A git-irrelevant working dir + a configured (empty) default_dir: `overview`
+    // with no argument should fall back to default_dir and say so on stderr.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let dest = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    grove(home.path()).args(["configure", "default_dir"]).arg(dest.path()).assert().success();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .current_dir(cwd.path())
+        .arg("overview")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("showing"))
+        .stderr(predicate::str::contains(dest.path().to_string_lossy().into_owned()))
+        .stdout(predicate::str::contains("No git repositories"));
+}
+
+#[test]
+fn overview_stamps_the_fetch_cache() {
+    // A cache miss fetches and then stamps the folder, so a fetch-* file appears.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let repos = tempdir().unwrap();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["overview"])
+        .arg(repos.path())
+        .assert()
+        .success();
+    let stamp_dir = cache.path().join("grove");
+    let stamped = fs::read_dir(&stamp_dir).map(|rd| rd.count() > 0).unwrap_or(false);
+    assert!(stamped, "no fetch stamp written under {}", stamp_dir.display());
+}
+
+#[test]
+fn listing_reflects_configured_aliases_and_drops_the_setup_nudge() {
+    // A grove file with a renamed overview alias: the listing shows the rename and
+    // the "configured" footer, not the "aren't installed yet" nudge.
+    let home = tempdir().unwrap();
+    let aliases = home.path().join("grove").join("aliases");
+    fs::create_dir_all(aliases.parent().unwrap()).unwrap();
+    fs::write(&aliases, "gv = grove overview\nlgp = grove pull-all\n").unwrap();
+    grove(home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(gv)"))
+        .stdout(predicate::str::contains("(lgp)"))
+        .stdout(predicate::str::contains("Aliases are yours to edit"))
+        .stdout(predicate::str::contains("aren't installed yet").not());
+}
+
+#[test]
 fn overview_on_a_non_directory_fails_with_a_clear_error() {
     let home = tempdir().unwrap();
     grove(home.path())
@@ -182,4 +236,32 @@ fn setup_writes_the_grove_file_and_rc_block_idempotently() {
     run();
     let rc_after_second = fs::read_to_string(&rc).unwrap();
     assert_eq!(rc_after_second.matches(marker).count(), 1, "setup added a duplicate rc block");
+
+    // The default_dir autodetect offer is interactive-only: run non-interactively
+    // (no TTY), it must never write a settings file behind the user's back.
+    assert!(!cfg.join("grove").join("config").exists(), "setup wrote a settings file non-interactively");
+}
+
+#[test]
+fn setup_force_offers_no_default_dir_even_with_a_repo_folder_present() {
+    // Even when $HOME clearly has a repo folder, `--force` (scripts) must stay
+    // fully non-interactive and set no default_dir.
+    let home = tempdir().unwrap();
+    let cfg = home.path().join(".config");
+    for r in ["a", "b", "c"] {
+        fs::create_dir_all(home.path().join("Developer").join(r).join(".git")).unwrap();
+    }
+    Command::cargo_bin("grove")
+        .unwrap()
+        .env("NO_COLOR", "1")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", &cfg)
+        .env("SHELL", "/bin/zsh")
+        .env_remove("ZDOTDIR")
+        .args(["setup", "zsh", "--force"])
+        .assert()
+        .success();
+    let config = cfg.join("grove").join("config");
+    let has_default = config.exists() && fs::read_to_string(&config).unwrap().contains("default_dir");
+    assert!(!has_default, "--force setup set a default_dir");
 }

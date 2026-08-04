@@ -236,7 +236,7 @@ fn resolve_dir(dir: Option<PathBuf>, settings: &settings::Settings) -> Option<Pa
     if grove_core::git::inside_repo() || !grove_core::git::discover(Path::new(".")).is_empty() {
         return None;
     }
-    grove_core::ui::note(&format!("no git repos here — showing {} (default_dir)", default.display()));
+    grove_core::ui::note(&format!("no git repos here — showing {} (default_dir)", settings::tildify(default)));
     Some(default.clone())
 }
 

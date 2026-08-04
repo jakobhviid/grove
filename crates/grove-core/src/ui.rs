@@ -93,3 +93,21 @@ pub fn bar(len: u64, msg: &str) -> ProgressBar {
     pb.enable_steady_tick(std::time::Duration::from_millis(90));
     pb
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{link, open};
+
+    #[test]
+    fn open_builds_a_file_url_encoding_percent_and_space() {
+        let s = open("/a b/c%d", "repoA");
+        // `%` is encoded before ` `, so neither double-encodes the other.
+        assert!(s.contains("file:///a%20b/c%25d"), "unexpected url in: {s:?}");
+        assert!(s.contains("repoA"));
+    }
+
+    #[test]
+    fn open_wraps_the_text_in_an_osc8_link() {
+        assert_eq!(open("/tmp/x", "T"), link("file:///tmp/x", "T"));
+    }
+}

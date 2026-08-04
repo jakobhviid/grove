@@ -338,7 +338,73 @@ pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
     } else {
         println!("{}", paint("90", "Already set up — open a new shell if you haven't reloaded."));
     }
+
+    // 3) Offer to autodetect a `default_dir` (the folder the multi-repo verbs fall
+    //    back to). The fallback is inert without one, and most people have a single
+    //    repo folder we can find. Interactive only, and never when a default is set.
+    suggest_default_dir(force);
     Ok(())
+}
+
+/// After provisioning aliases, offer to set `default_dir` — the folder the
+/// multi-repo verbs fall back to. We autodetect the folders full of git repos
+/// under `$HOME` and present them as a numbered menu to pick from (or type your
+/// own path, or skip). Skipped when a default is already set, under `--force`,
+/// and whenever stdin/stdout isn't a TTY — so scripts and unattended provisioning
+/// are never prompted or silently reconfigured.
+fn suggest_default_dir(force: bool) {
+    use grove_core::ui::paint;
+    use std::io::Write;
+    if force || crate::settings::default_dir_configured() {
+        return;
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return;
+    }
+    let candidates = crate::settings::detect_candidates();
+    if candidates.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("{}", paint("1", "Pick a default folder for the multi-repo commands (lg/lgs/lgp/lgpp):"));
+    let w = candidates.len().to_string().len();
+    for (i, (path, repos)) in candidates.iter().enumerate() {
+        let count = format!("{repos} git {}", if *repos == 1 { "repo" } else { "repos" });
+        // Show `~/Developer`, not the noisy `/Users/you/Developer`.
+        println!("  {} {}  {}", paint("36", &format!("{:>w$})", i + 1)), crate::settings::tildify(path), paint("90", &count));
+    }
+    print!("  choose [1-{}], type a path, or Enter to skip: ", candidates.len());
+    let _ = io::stdout().flush();
+
+    let mut line = String::new();
+    if io::stdin().read_line(&mut line).is_err() {
+        return;
+    }
+    let choice = line.trim();
+    // A number picks from the menu; a non-empty non-number is treated as a path
+    // the user typed (so they can point at a folder we didn't detect); empty skips.
+    let picked: Option<PathBuf> = if choice.is_empty() {
+        None
+    } else if let Ok(n) = choice.parse::<usize>() {
+        candidates.get(n.wrapping_sub(1)).map(|(p, _)| p.clone())
+    } else {
+        let typed = crate::settings::expand_tilde(choice);
+        typed.is_dir().then_some(typed)
+    };
+
+    match picked {
+        // Store the tilde form (`~/Developer`) — readable in the settings file, and
+        // `settings::load` expands it back on use.
+        Some(dir) => {
+            let stored = crate::settings::tildify(&dir);
+            match crate::settings::put("default_dir", &stored) {
+                Ok(()) => println!("  {} default_dir = {}", paint("1;32", "set"), paint("1", &stored)),
+                Err(e) => grove_core::ui::err(&format!("{e:#}")),
+            }
+        }
+        None => println!("  {}", paint("90", "skipped — set one later with `grove configure default_dir <path>`")),
+    }
 }
 
 /// Guess the shell from `$SHELL` (used when `grove setup` is run without an arg).

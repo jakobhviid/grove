@@ -368,3 +368,14 @@ fn render_summary(report: &Report, hints: &Hints) {
         println!("  {} {}", ui::paint("90", "→"), ui::paint("90", "tip: `grove setup` installs the short aliases (lg lgs lgp lgpp lt)"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::token;
+
+    #[test]
+    fn token_prefers_the_bound_alias_else_the_long_form() {
+        assert_eq!(token(&Some("lgpp".to_string()), "grove push-all"), "`lgpp`");
+        assert_eq!(token(&None, "grove push-all"), "`grove push-all`");
+    }
+}

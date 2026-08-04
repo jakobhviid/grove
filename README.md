@@ -85,8 +85,10 @@ The multi-repo commands (`overview`, `sync`, `pull-all`, `push-all`) operate on
 the **immediate subdirectories** of the folder (default: the current directory)
 that contain a `.git`. `--version`/`-V` and a man page are available; the data
 tools take **`--json`** (see below). Run bare `grove` for a one-screen overview
-of the whole suite. Set a **`default_dir`** (via `grove configure`) and the
-multi-repo verbs fall back to it when the current folder has no repos of its own.
+of the whole suite. Set a **`default_dir`** — `grove setup` shows a menu of the
+repo folders under your home to pick from, or set it with `grove configure
+default_dir <path>` — and the multi-repo verbs fall back to it when the current
+folder has no repos of its own.
 
 ## Machine-readable output (`--json`)
 

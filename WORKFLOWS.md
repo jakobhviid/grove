@@ -83,6 +83,12 @@ grove setup zsh           # or name it explicitly (zsh | bash | fish)
    (`~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`) that loads the
    aliases on every startup. Re-running never adds a second block.
 3. Prints exactly what it changed.
+4. If you have no `default_dir` yet, shows a short **menu of the repo folders it
+   finds under your home** — ranked, with conventionally named dev folders
+   (`~/Developer` / `~/src` / `~/code` …) first, then any other collection, top 5
+   — and lets you pick one, type your own path, or press Enter to skip. What you
+   pick becomes the folder the multi-repo verbs fall back to. Interactive only:
+   scripts and `--force` are never prompted, and it's skipped once a default is set.
 
 Then open a new shell (or `source ~/.zshrc`). Now `gs`, `gc`, `lg`, `lt`, … work.
 
@@ -210,4 +216,5 @@ grove configure cache_ttl 10            # seconds a fetch stays fresh (default 5
 - **`default_dir`** — when you run `lg`/`lgs`/`lgp`/`lgpp` in a folder that has
   nothing to do with git (not inside a repo, no repo subfolders), grove runs in
   this folder instead and prints a dim note saying so. An explicit `dir` argument
-  always wins; unset, nothing changes.
+  always wins; unset, nothing changes. `grove setup` offers a menu of your repo
+  folders to pick from, or set it directly with `grove configure default_dir <path>`.
