@@ -70,7 +70,7 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Switch the HTTPS remotes of every repo in a folder to SSH (so overview/sync/push-all can fetch them). Previews and asks before changing anything.
+    /// Switch the HTTPS remotes of every repo in a folder to SSH (so overview/sync/pull-all/push-all can fetch them). Previews and asks before changing anything.
     Ssh {
         /// Folder of repositories (default: current directory).
         dir: Option<PathBuf>,

@@ -38,7 +38,7 @@ class Grove < Formula
 
   def install
     # grove is a single binary: the git verbs (status/add/commit/pull/push) and
-    # the multi-repo/tree tools (overview/sync/push-all/tree) are all subcommands.
+    # the multi-repo/tree tools (overview/sync/pull-all/push-all/tree) are all subcommands.
     bin.install "grove"
     # `grove completions <shell>` emits the suite's completions. For zsh it's a
     # single `_grove` file covering grove and every alias (they inherit grove's
@@ -50,17 +50,18 @@ class Grove < Formula
   def caveats
     <<~EOS
       grove is one command. Everything works immediately — no setup:
-        grove overview / sync / push-all / tree     (dashboard / sync / bulk-push / tree)
-        grove status / add / commit / pull / push   (the everyday git verbs)
+        grove overview / sync / pull-all / push-all / tree   (dashboard / sync / bulk pull / bulk push / tree)
+        grove status / add / commit / pull / push            (the everyday git verbs)
 
-      For the short names — gs ga gc gcp gp gpp (git verbs) and lg lgp lgpp lt
+      For the short names — gs ga gc gcp gp gpp (git verbs) and lg lgs lgp lgpp lt
       (multi-repo tools) — provision your shell once:
         grove setup            # writes ~/.config/grove/aliases + one line in your rc
       then open a new shell. (`grove init <shell>` just prints the lines to eval.)
       Rename any alias that clashes on your system (e.g. gc, or lg vs lazygit).
+      Tune behavior with `grove configure` (cache, default_dir).
 
       Run `grove` for an overview, or `grove --llm` for a machine-readable guide.
-      `grove tree` and `grove overview`'s clickable repo links use Nerd Font icons —
+      `grove tree` and `grove overview`'s forge icons use Nerd Font glyphs —
       use a Nerd Font for best results.
     EOS
   end

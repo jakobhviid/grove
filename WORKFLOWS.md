@@ -49,8 +49,8 @@ convenience and are not expanded in scripts.
 
 ## Machine-readable output (for agents)
 
-`overview`, `sync`, `push-all`, and `tree` take `--json` — one document to
-stdout, progress to stderr, so the pipe stays clean:
+`overview`, `sync`, `pull-all`, `push-all`, and `tree` take `--json` — one
+document to stdout, progress to stderr, so the pipe stays clean:
 
 ```sh
 grove overview ~/src --json     # {dir, repos:[{name,path,branch,https,web_url,ahead,behind,staged,modified,untracked}], summary:{...}}

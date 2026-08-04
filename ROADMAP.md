@@ -8,14 +8,14 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 - **`grove ssh --json`.** `ssh` is the one data-touching verb without a
   machine-readable mode: it previews changes and asks for confirmation, but has
   no `--json`. Add a `--json` document (the planned rewrites + what was applied),
-  consistent with `overview`/`sync`/`push-all`/`tree`, so an agent can drive the
-  HTTPS→SSH migration.
+  consistent with `overview`/`sync`/`pull-all`/`push-all`/`tree`, so an agent can
+  drive the HTTPS→SSH migration.
 - **Completion parity for bash & fish.** The hand-written zsh completion delegates
   the git verbs to zsh's own `_git` and offers folder completion for the
   multi-repo verbs. bash and fish only get the clap-generated fallback, which
   does neither. Either hand-write bash/fish equivalents or enrich the generated
   ones.
-- **Deeper repo discovery.** `overview`/`sync`/`push-all` scan only the
+- **Deeper repo discovery.** `overview`/`sync`/`pull-all`/`push-all` scan only the
   *immediate* subdirectories of the folder. A `--depth N` (or recursive) mode
   would pick up nested layouts (e.g. `~/src/org/repo`).
 - **`tree` polish.** Optional `.gitignore` awareness and file-type-aware icons,
