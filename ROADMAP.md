@@ -30,6 +30,15 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **Symmetric multi-repo trio + settings.** `sync` took the honest `lgs` alias
+  (it does both directions); `lgp` became the new `grove pull-all` (fast-forward
+  every behind repo), the mirror of `push-all` (`lgpp`). The listings and `→`
+  hints resolve to the user's actual aliases and nudge `grove setup` when none are
+  provisioned. Added `grove configure` over a `~/.config/grove/config` settings
+  file (`cache`, `cache_ttl`, `default_dir`), a fetch-freshness cache under
+  `~/.cache/grove` (skips only the network fetch; local state stays fresh), a
+  default-dir fallback for git-irrelevant folders, and clickable `file://` repo/
+  folder names in `overview` and `tree`.
 - **2.0 — collapse to one binary.** `lg`/`lgp`/`lgpp`/`lt` became the `grove`
   subcommands `overview`/`sync`/`push-all`/`tree`, exposed as `grove setup`
   aliases; `--json` added to the data-producing verbs; the CI green gate,

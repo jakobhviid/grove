@@ -46,6 +46,9 @@ fn forge_icon(web_url: &str) -> &'static str {
 #[derive(Serialize)]
 pub struct RepoStatus {
     pub name: String,
+    /// Absolute path to the repo — the target of the clickable-name `file://`
+    /// link, and handy for `--json` consumers that want to act on the repo.
+    pub path: String,
     pub branch: String,
     /// origin is still on https (flagged, never fetched).
     pub https: bool,
@@ -94,6 +97,34 @@ pub struct Report {
     pub summary: Summary,
 }
 
+/// How the next-step `→` hints should name the commands that clear pending work.
+/// The binary fills each field with the alias the user actually bound in their
+/// grove file (e.g. `lgpp` for `grove push-all`), or `None` when they haven't —
+/// then the hint falls back to the long `grove …` form. `configured` is false
+/// when there's no grove file at all, which turns on a one-line `grove setup`
+/// nudge. Defaulting every field (`Hints::default()`) yields the long forms with
+/// no nudge — the right behavior for `--json` callers, which never render hints.
+#[derive(Default)]
+pub struct Hints {
+    /// Alias bound to `grove pull-all` (default `lgp`), if any.
+    pub pull_all: Option<String>,
+    /// Alias bound to `grove push-all` (default `lgpp`), if any.
+    pub push_all: Option<String>,
+    /// Alias bound to `grove ssh` (there is no default alias for it), if any.
+    pub ssh: Option<String>,
+    /// Whether a grove file exists (aliases are provisioned); gates the nudge.
+    pub configured: bool,
+}
+
+/// The command token a hint should show: the user's short alias in backticks
+/// when they have one, else the long `grove …` form.
+fn token(alias: &Option<String>, long: &str) -> String {
+    match alias {
+        Some(a) => format!("`{a}`"),
+        None => format!("`{long}`"),
+    }
+}
+
 /// Discover the repos directly under `dir` and read each one's state, fetching
 /// the ssh repos first in parallel when `fetch`. Pure data: prints nothing but
 /// the shared "Fetching" progress bar (stderr). Render with [`render_human`], or
@@ -120,9 +151,13 @@ pub fn collect(dir: Option<&Path>, fetch: bool) -> Result<Report> {
             let https = git::is_https(&r.path);
             let branch = git::branch(&r.path);
             let web_url = git::web_url(&r.path);
+            // Absolute path for the clickable-name file:// link; fall back to the
+            // discovered path if canonicalization fails (e.g. a race removing it).
+            let path = std::fs::canonicalize(&r.path).unwrap_or_else(|_| r.path.clone()).display().to_string();
             if https {
                 return RepoStatus {
                     name: r.name.clone(),
+                    path,
                     branch,
                     https,
                     web_url,
@@ -143,6 +178,7 @@ pub fn collect(dir: Option<&Path>, fetch: bool) -> Result<Report> {
             let dirty = git::dirty(&r.path);
             RepoStatus {
                 name: r.name.clone(),
+                path,
                 branch,
                 https,
                 web_url,
@@ -190,8 +226,10 @@ fn summarize(repos: &[RepoStatus]) -> Summary {
 }
 
 /// Paint the dashboard for a human: the aligned, colored table plus the roll-up
-/// and next-step hints. `--json` callers skip this and serialize the [`Report`].
-pub fn render_human(report: &Report) {
+/// and next-step hints. `hints` decides whether those hints name the user's short
+/// aliases or the long `grove …` forms. `--json` callers skip this and serialize
+/// the [`Report`].
+pub fn render_human(report: &Report, hints: &Hints) {
     if report.repos.is_empty() {
         println!("No git repositories in {}", report.dir);
         return;
@@ -241,10 +279,14 @@ pub fn render_human(report: &Report) {
     for r in rows {
         // A fully-clean, in-sync ssh repo needs no attention. Rather than dim the
         // clean rows (which vanish on a dark terminal), keep them normal and make
-        // the rows that DO need attention **bold**, so the eye lands on them.
+        // the rows that DO need attention **bold**, so the eye lands on them. The
+        // name is also a file:// link that opens the repo folder (the counterpart
+        // to the forge glyph, which opens its web page) — on terminals that render
+        // OSC 8; elsewhere it's plain text.
         let name = {
             let padded = format!("{:<name_w$}", r.name);
-            if r.calm() { padded } else { ui::paint("1", &padded) }
+            let painted = if r.calm() { padded } else { ui::paint("1", &padded) };
+            if links && !r.path.is_empty() { ui::open(&r.path, &painted) } else { painted }
         };
         let link = row_link(r);
         let branch = ui::paint("34", &format!("{:<branch_w$}", r.branch));
@@ -274,13 +316,13 @@ pub fn render_human(report: &Report) {
         }
         println!("{line}");
     }
-    render_summary(report);
+    render_summary(report, hints);
     println!();
 }
 
 /// A one-line roll-up under the table — counts toned by severity — plus the exact
 /// command to clear each kind of pending work. This is the at-a-glance triage.
-fn render_summary(report: &Report) {
+fn render_summary(report: &Report, hints: &Hints) {
     let summary = &report.summary;
     let https_names: Vec<&str> = report.repos.iter().filter(|r| r.https).map(|r| r.name.as_str()).collect();
 
@@ -300,22 +342,29 @@ fn render_summary(report: &Report) {
     add(summary.no_upstream, "no upstream", "90");
     println!("\n  {}", parts.join(&sep));
 
-    // Hints name the real subcommands (they always work); the short aliases
-    // lg/lgp/lgpp are only present after `grove setup`.
-    let mut hints: Vec<String> = Vec::new();
+    // Each hint names the command that clears that kind of work, in the caller's
+    // preferred form: the user's short alias when they have one (`lgpp`), else the
+    // long `grove …` verb. The direction-specific verbs pull-all/push-all mirror
+    // the behind/ahead counts exactly; `ssh` has no default alias, so it stays long.
+    let mut lines: Vec<String> = Vec::new();
     if summary.ahead > 0 {
-        hints.push(format!("`grove push-all` pushes {} with unpushed commits", summary.ahead));
+        lines.push(format!("{} pushes {} with unpushed commits", token(&hints.push_all, "grove push-all"), summary.ahead));
     }
     if summary.behind > 0 {
-        hints.push("`grove sync` fast-forwards the clean, behind repos".into());
+        lines.push(format!("{} fast-forward-pulls {} behind {}", token(&hints.pull_all, "grove pull-all"), summary.behind, if summary.behind == 1 { "repo" } else { "repos" }));
     }
     if !https_names.is_empty() {
-        hints.push(format!("`grove ssh` switches {} to SSH: {}", https_names.len(), https_names.join(", ")));
+        lines.push(format!("{} switches {} to SSH: {}", token(&hints.ssh, "grove ssh"), https_names.len(), https_names.join(", ")));
     }
     if summary.diverged > 0 {
-        hints.push(format!("{} diverged — reconcile by hand", summary.diverged));
+        lines.push(format!("{} diverged — reconcile by hand", summary.diverged));
     }
-    for hint in hints {
-        println!("  {} {}", ui::paint("36", "→"), hint);
+    for line in lines {
+        println!("  {} {}", ui::paint("36", "→"), line);
+    }
+    // When aliases aren't provisioned yet, the hints above showed the long forms —
+    // point out that `grove setup` installs the short ones. Dropped once set up.
+    if !hints.configured {
+        println!("  {} {}", ui::paint("90", "→"), ui::paint("90", "tip: `grove setup` installs the short aliases (lg lgs lgp lgpp lt)"));
     }
 }

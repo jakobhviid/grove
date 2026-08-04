@@ -1,7 +1,8 @@
-//! Shared logic behind the grove tools. `grove` calls in here for the git verbs
-//! (status/add/commit/pull/push) and the multi-repo tools lg/lgp/lgpp/lt are
-//! their own thin binaries that do too. Keeping the logic in one lib means the
-//! tools share the same git handling, colors, and error style.
+//! Shared logic behind the grove tools. The single `grove` binary calls in here
+//! for the git verbs (status/add/commit/pull/push) and the multi-repo tools
+//! (overview/sync/pull-all/push-all — the `lg`/`lgs`/`lgp`/`lgpp` aliases) plus
+//! `tree`. Keeping the logic in one lib means every verb shares the same git
+//! handling, colors, and error style, and a second frontend could reuse it.
 pub mod git;
 pub mod overview;
 pub mod passthrough;

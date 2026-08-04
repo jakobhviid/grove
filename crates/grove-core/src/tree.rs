@@ -92,18 +92,32 @@ fn name(p: &Path) -> String {
 }
 
 pub fn render_human(report: &TreeReport) {
-    println!("{}", ui::paint("1;34", &report.root));
-    render_entries(&report.entries, "");
+    // Absolute base so each folder's file:// link resolves regardless of where the
+    // tree was rooted (`.`, a relative path, …); fall back to the printed root.
+    let base = fs::canonicalize(&report.root).unwrap_or_else(|_| PathBuf::from(&report.root));
+    let root_label = ui::paint("1;34", &report.root);
+    if ui::hyperlinks() {
+        println!("{}", ui::open(&base.display().to_string(), &root_label));
+    } else {
+        println!("{root_label}");
+    }
+    render_entries(&report.entries, "", &base);
 }
 
-fn render_entries(entries: &[Entry], prefix: &str) {
+fn render_entries(entries: &[Entry], prefix: &str, base: &Path) {
+    let links = ui::hyperlinks();
     let n = entries.len();
     for (i, entry) in entries.iter().enumerate() {
         let last = i + 1 == n;
         let connector = if last { "└── " } else { "├── " };
+        let path = base.join(&entry.name);
 
         let label = if entry.kind == "dir" {
-            let mut s = format!("{} {}", ui::paint("34", ICON_DIR), ui::paint("1;34", &entry.name));
+            // Folder names are clickable — a file:// link opens the directory in
+            // the OS file manager (only where OSC 8 renders; plain text elsewhere).
+            let painted = ui::paint("1;34", &entry.name);
+            let name = if links { ui::open(&path.display().to_string(), &painted) } else { painted };
+            let mut s = format!("{} {}", ui::paint("34", ICON_DIR), name);
             if entry.is_repo {
                 s.push(' ');
                 s.push_str(&ui::paint("38;5;208", ICON_GIT)); // git orange
@@ -117,7 +131,7 @@ fn render_entries(entries: &[Entry], prefix: &str) {
 
         if entry.kind == "dir" && !entry.children.is_empty() {
             let child_prefix = format!("{prefix}{}", if last { "    " } else { "│   " });
-            render_entries(&entry.children, &child_prefix);
+            render_entries(&entry.children, &child_prefix, &path);
         }
     }
 }

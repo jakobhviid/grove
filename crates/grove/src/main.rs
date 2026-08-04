@@ -1,20 +1,23 @@
 //! grove — the git-shortcut command suite. `grove` bundles the everyday git
 //! verbs (status/add/commit/pull/push, each exec-ing git), the multi-repo tools
-//! (overview/sync/push-all, each over a folder of repos), a self-contained tree
-//! view, and the shell-alias setup (`grove setup`). It is a single binary: the
-//! short names (gs/ga/gc/…, and lg/lgp/lgpp/lt for the multi-repo tools) are
-//! opt-in shell aliases emitted by `grove setup`, so nothing short lands on
-//! PATH to collide with other tools (notably `lg` vs lazygit): rename any that
-//! clash in your grove file.
+//! (overview/sync/pull-all/push-all, each over a folder of repos), a
+//! self-contained tree view, the shell-alias setup (`grove setup`), and its own
+//! settings (`grove configure`). It is a single binary: the short names
+//! (gs/ga/gc/…, and lg/lgs/lgp/lgpp/lt for the multi-repo tools) are opt-in shell
+//! aliases emitted by `grove setup`, so nothing short lands on PATH to collide
+//! with other tools (notably `lg` vs lazygit): rename any that clash in your
+//! grove file.
+mod cache;
 mod completions;
 mod config;
+mod settings;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const REPO_URL: &str = "https://github.com/jakobhviid/grove";
 const AFTER_HELP: &str = concat!(
-    "Short aliases: `grove setup` installs gs/ga/gc/gcp/gp/gpp (git verbs) and lg/lgp/lgpp/lt (multi-repo tools).\n",
+    "Short aliases: `grove setup` installs gs/ga/gc/gcp/gp/gpp (git verbs) and lg/lgs/lgp/lgpp/lt (multi-repo tools).\n",
     "Repository: https://github.com/jakobhviid/grove (inspect the source there if needed)\n",
     "LLM guide: pass `--llm` for a full machine-readable reference (the whole command suite)."
 );
@@ -83,11 +86,19 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Fast-forward-pull the behind repos and push the ahead ones (clean, in-sync only), then show the overview (alias: lgp).
+    /// Fast-forward-pull the behind repos and push the ahead ones (clean, in-sync only), then show the overview (alias: lgs).
     Sync {
         /// Folder of repositories (default: current directory).
         dir: Option<PathBuf>,
         /// Emit what was synced (and the overview) as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fast-forward every repo in a folder that is behind its upstream (no push), then show the overview (alias: lgp).
+    PullAll {
+        /// Folder of repositories (default: current directory).
+        dir: Option<PathBuf>,
+        /// Emit what was pulled (and the overview) as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -124,6 +135,13 @@ enum Cmd {
     Init { shell: config::Shell },
     /// Print a starter grove file you can save to ~/.config/grove/aliases.
     Example,
+    /// Get or set grove's settings in ~/.config/grove/config (cache, cache_ttl, default_dir). No args lists them all.
+    Configure {
+        /// Setting name (omit to list every setting and its value).
+        key: Option<String>,
+        /// New value (omit to just read the current value).
+        value: Option<String>,
+    },
     /// Print a shell completion script (bash|zsh|fish|…) for the grove suite to stdout.
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -146,14 +164,16 @@ fn main() {
         Some(Cmd::Commit { all, push, message }) => run(grove_core::passthrough::commit(all, push, &message)),
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
-        Some(Cmd::Ssh { dir, yes }) => run(grove_core::remote::run(dir.as_deref(), yes)),
+        Some(Cmd::Ssh { dir, yes }) => run(grove_core::remote::run(dir.as_deref(), yes, &hints())),
         Some(Cmd::Overview { dir, json }) => run(cmd_overview(dir, json)),
         Some(Cmd::Sync { dir, json }) => run(cmd_sync(dir, json)),
+        Some(Cmd::PullAll { dir, json }) => run(cmd_pull_all(dir, json)),
         Some(Cmd::PushAll { dir, json }) => run(cmd_push_all(dir, json)),
         Some(Cmd::Tree { dir, level, all, json }) => run(cmd_tree(dir, level, all, json)),
         Some(Cmd::Setup { shell, force }) => run(config::setup(shell, force)),
         Some(Cmd::Init { shell }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
+        Some(Cmd::Configure { key, value }) => run(settings::configure(key, value)),
         Some(Cmd::Completions { shell }) => completions::emit(shell),
         Some(Cmd::Man) => {
             let _ = clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout());
@@ -161,36 +181,114 @@ fn main() {
     }
 }
 
+/// The next-step hints for the human dashboard, resolved to the aliases the user
+/// actually bound in their grove file (or the long `grove …` forms, plus a
+/// `grove setup` nudge, when they haven't provisioned any).
+fn hints() -> grove_core::overview::Hints {
+    grove_core::overview::Hints {
+        pull_all: config::alias_for("grove pull-all"),
+        push_all: config::alias_for("grove push-all"),
+        ssh: config::alias_for("grove ssh"),
+        configured: config::is_configured(),
+    }
+}
+
+/// Everything the multi-repo verbs settle before calling core: the folder to act
+/// on (after the default-dir fallback), whether to fetch (a cache miss), and the
+/// cache key to stamp once we have.
+struct Plan {
+    dir: Option<PathBuf>,
+    key: PathBuf,
+    fetch: bool,
+    stamp: bool,
+}
+
+/// Apply the default-dir fallback, then let the fetch-freshness cache decide
+/// whether this run needs to fetch. Call [`Plan::done`] after the command runs.
+fn plan(dir: Option<PathBuf>) -> Plan {
+    let settings = settings::load();
+    let dir = resolve_dir(dir, &settings);
+    let key = dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    let fetch = !(settings.cache && cache::is_fresh(&key, settings.ttl()));
+    Plan { stamp: fetch && settings.cache, dir, key, fetch }
+}
+
+impl Plan {
+    /// Stamp the cache if we actually fetched — so a follow-up verb on the same
+    /// folder within the TTL can skip its fetch.
+    fn done(&self) {
+        if self.stamp {
+            cache::stamp(&self.key);
+        }
+    }
+}
+
+/// When no folder is given and the current directory has nothing to do with git
+/// (not inside a repo, and no immediate sub-repo to list), fall back to the
+/// configured `default_dir` — with a dim note so it's never a silent surprise. An
+/// explicit folder argument always wins, and with no `default_dir` set nothing
+/// changes (core defaults to `.`).
+fn resolve_dir(dir: Option<PathBuf>, settings: &settings::Settings) -> Option<PathBuf> {
+    if dir.is_some() {
+        return dir;
+    }
+    let default = settings.default_dir.as_ref()?;
+    if grove_core::git::inside_repo() || !grove_core::git::discover(Path::new(".")).is_empty() {
+        return None;
+    }
+    grove_core::ui::note(&format!("no git repos here — showing {} (default_dir)", default.display()));
+    Some(default.clone())
+}
+
 /// The multi-repo dashboard (`grove overview`, alias `lg`): resolve the folder,
 /// collect every repo's state, then render the human table or the JSON document.
 fn cmd_overview(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let report = grove_core::overview::collect(dir.as_deref(), true)?;
+    let p = plan(dir);
+    let report = grove_core::overview::collect(p.dir.as_deref(), p.fetch)?;
+    p.done();
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        grove_core::overview::render_human(&report);
+        grove_core::overview::render_human(&report, &hints());
     }
     Ok(())
 }
 
-/// `grove sync` (alias `lgp`): pull/push the clean, in-sync repos, then render.
+/// `grove sync` (alias `lgs`): pull/push the clean, in-sync repos, then render.
 fn cmd_sync(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let report = grove_core::sync::run(dir.as_deref())?;
+    let p = plan(dir);
+    let report = grove_core::sync::run(p.dir.as_deref(), p.fetch)?;
+    p.done();
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        grove_core::sync::render_human(&report);
+        grove_core::sync::render_human(&report, &hints());
+    }
+    Ok(())
+}
+
+/// `grove pull-all` (alias `lgp`): fast-forward every behind repo, then render.
+fn cmd_pull_all(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
+    let p = plan(dir);
+    let report = grove_core::sync::pull_all(p.dir.as_deref(), p.fetch)?;
+    p.done();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        grove_core::sync::render_pull(&report, &hints());
     }
     Ok(())
 }
 
 /// `grove push-all` (alias `lgpp`): push every ahead repo, then render.
 fn cmd_push_all(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let report = grove_core::sync::push_all(dir.as_deref())?;
+    let p = plan(dir);
+    let report = grove_core::sync::push_all(p.dir.as_deref(), p.fetch)?;
+    p.done();
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        grove_core::sync::render_push(&report);
+        grove_core::sync::render_push(&report, &hints());
     }
     Ok(())
 }
@@ -228,8 +326,8 @@ fn llm_guide() -> String {
     out.push_str(&format!("Repository: {REPO_URL}  (read the source there if you need behavior details)\n"));
     out.push_str("This is the same reference as `man grove`, laid out plainly for LLM reading.\n");
     out.push_str("grove is one binary: the git verbs (status/add/commit/pull/push) exec git; the\n");
-    out.push_str("multi-repo tools (overview/sync/push-all) and the tree view work over a folder.\n");
-    out.push_str("The short names (gs/ga/… and lg/lgp/lgpp/lt) are shell aliases from `grove setup`.\n");
+    out.push_str("multi-repo tools (overview/sync/pull-all/push-all) and the tree view work over a folder.\n");
+    out.push_str("The short names (gs/ga/… and lg/lgs/lgp/lgpp/lt) are shell aliases from `grove setup`.\n");
     out.push_str("Full documentation follows.\n\n");
 
     out.push_str("================================ grove COMMAND REFERENCE ================================\n\n");
@@ -260,6 +358,10 @@ fn print_suite_overview() {
     let hdr = |s: &str| println!("\n{}", paint("1", s));
     // Pad the name to width *before* coloring, so ANSI codes don't skew columns.
     let row = |name: &str, desc: &str| println!("  {} {}", paint("36", &format!("{name:<22}")), desc);
+    // The alias the user bound to a verb (e.g. `lg`), else grove's default name —
+    // so the parens name what you'd actually type on this machine.
+    let alias = |cmd: &str, default: &str| config::alias_for(cmd).unwrap_or_else(|| default.to_string());
+    let configured = config::is_configured();
 
     println!("{} — git shortcuts + multi-repo tools", paint("1;32", "grove"));
 
@@ -271,19 +373,28 @@ fn print_suite_overview() {
     row("grove push", "git push");
 
     hdr("MULTI-REPO  (subcommands — run in a folder of repos; alias in parens)");
-    row("grove overview [dir]", "dashboard: branch, ahead/behind, dirty state per repo  (lg)");
-    row("grove sync [dir]", "auto pull/push the clean, in-sync repos, then overview  (lgp)");
-    row("grove push-all [dir]", "push every repo with unpushed commits (no pull)  (lgpp)");
+    row("grove overview [dir]", &format!("dashboard: branch, ahead/behind, dirty state per repo  ({})", alias("grove overview", "lg")));
+    row("grove sync [dir]", &format!("pull the behind + push the ahead clean repos, then overview  ({})", alias("grove sync", "lgs")));
+    row("grove pull-all [dir]", &format!("fast-forward every behind repo (no push)  ({})", alias("grove pull-all", "lgp")));
+    row("grove push-all [dir]", &format!("push every repo with unpushed commits (no pull)  ({})", alias("grove push-all", "lgpp")));
     row("grove ssh [dir]", "switch HTTPS remotes to SSH (previews & asks first)");
 
     hdr("FILES");
-    row("grove tree [dir] [-a]", "tree view; git repos get a git icon  (lt)");
+    row("grove tree [dir] [-a]", &format!("tree view; git repos get a git icon  ({})", alias("grove tree", "lt")));
 
-    hdr("SHELL ALIASES  (short names — gs ga gc gcp gp gpp, and lg lgp lgpp lt)");
+    hdr("SHELL ALIASES  (short names — gs ga gc gcp gp gpp, and lg lgs lgp lgpp lt)");
     row("grove setup [sh]", "provision your shell: writes the grove file + rc line (one-stop)");
     row("grove init <sh>", "just print the alias lines (for eval / manual or scripted setup)");
     row("grove example", "print a starter grove file");
 
-    println!("\n{}", paint("90", "Aliases are yours to edit — rename any that clash on your system (e.g. `lg` if you use lazygit)."));
-    println!("{}", paint("90", "Machine-readable: `grove overview|sync|push-all|tree --json`, or `grove --llm` for the full guide."));
+    hdr("SETTINGS");
+    row("grove configure", "get/set settings: cache, cache_ttl, default_dir (no args lists them)");
+
+    println!();
+    if configured {
+        println!("{}", paint("90", "Aliases are yours to edit — rename any that clash on your system (e.g. `lg` if you use lazygit)."));
+    } else {
+        println!("{}", paint("90", "Short aliases aren't installed yet — run `grove setup` to enable lg lgs lgp lgpp lt (and gs ga gc …)."));
+    }
+    println!("{}", paint("90", "Machine-readable: `grove overview|sync|pull-all|push-all|tree --json`, or `grove --llm` for the full guide."));
 }

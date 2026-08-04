@@ -16,12 +16,14 @@ grove/
     grove/                       # the thin CLI (the `grove` binary)
       src/main.rs                # clap definition, --llm, and the per-verb handlers
       src/config.rs              # the grove file + `grove setup`/`init` (shell aliases)
+      src/settings.rs            # the settings file + `grove configure` (cache, default_dir)
+      src/cache.rs               # fetch-freshness stamps under ~/.cache/grove
       src/completions.rs         # shell completions + man, from the one clap definition
     grove-core/                  # all the multi-repo/git logic, as typed functions
       src/lib.rs                 # crate doc + module index + reset_sigpipe
       src/git.rs                 # discover repos, read state by shelling out to git
       src/overview.rs            # `overview` (lg): collect the dashboard + render
-      src/sync.rs                # `sync` (lgp) + `push-all` (lgpp): act, then overview
+      src/sync.rs                # `sync` (lgs) + `pull-all` (lgp) + `push-all` (lgpp): act, then overview
       src/tree.rs                # `tree` (lt): build the tree + render
       src/remote.rs              # `ssh`: rewrite HTTPS remotes to SSH
       src/passthrough.rs         # the git verbs (status/add/commit/pull/push): exec git
@@ -33,13 +35,15 @@ There is **one binary**, `grove`. It bundles four kinds of command:
 - **Passthrough git verbs** — `status`, `add`, `commit`, `pull`, `push`. Each
   exec-replaces the process with `git` (on Unix) so colour, pager, signals, and
   the exit code are git's own. grove leaves no wrapper behind.
-- **Multi-repo tools** — `overview`, `sync`, `push-all`, over a folder of repos.
+- **Multi-repo tools** — `overview`, `sync`, `pull-all`, `push-all`, over a
+  folder of repos. `sync` is the everyday bidirectional one; `pull-all`/`push-all`
+  are the single-direction escape hatches.
 - **The tree view** — `tree`.
-- **Shell-alias setup** — `setup`, `init`, `example`, plus `ssh` and hidden
-  `completions`/`man`.
+- **Shell-alias setup & settings** — `setup`, `init`, `example`, `configure`,
+  plus `ssh` and hidden `completions`/`man`.
 
 The short names you actually type — `gs`/`ga`/`gc`/`gcp`/`gp`/`gpp` for the git
-verbs and `lg`/`lgp`/`lgpp`/`lt` for the multi-repo/tree tools — are **shell
+verbs and `lg`/`lgs`/`lgp`/`lgpp`/`lt` for the multi-repo/tree tools — are **shell
 aliases**, emitted by `grove setup` into the grove file, not separate binaries.
 Nothing short lands on `PATH`, so nothing collides with other tools (notably
 `lg`, which many people alias to lazygit); each alias is yours to rename. The
@@ -59,14 +63,19 @@ reimplementing anything.
 The data-producing tools separate *gathering* state from *rendering* it, so the
 same core call backs both the human table and `--json`:
 
-- `overview::collect(dir, fetch) -> Report`, `overview::render_human(&Report)`
-- `sync::run(dir) -> SyncReport`, `sync::render_human(&SyncReport)`
-- `sync::push_all(dir) -> PushReport`, `sync::render_push(&PushReport)`
+- `overview::collect(dir, fetch) -> Report`, `overview::render_human(&Report, &Hints)`
+- `sync::run(dir, fetch) -> SyncReport`, `sync::render_human(&SyncReport, &Hints)`
+- `sync::pull_all(dir, fetch) -> PullReport`, `sync::render_pull(&PullReport, &Hints)`
+- `sync::push_all(dir, fetch) -> PushReport`, `sync::render_push(&PushReport, &Hints)`
 - `tree::collect(dir, level, all) -> TreeReport`, `tree::render_human(&TreeReport)`
 
 The `Report` types are `#[derive(Serialize)]`; the CLI renders JSON with a single
-`serde_json::to_string_pretty(&report)`. `sync`/`push-all` embed the post-run
-`overview::Report`, so their JSON carries the dashboard as it stands afterwards.
+`serde_json::to_string_pretty(&report)`. `sync`/`pull-all`/`push-all` embed the
+post-run `overview::Report`, so their JSON carries the dashboard as it stands
+afterwards. The renderers take a `Hints` (built in the binary from the grove file)
+so the `→` next-step hints name the user's actual aliases; the `fetch` flag is set
+by the binary from the fetch-freshness cache (`cache.rs`) — `false` skips the
+network round-trips when a recent run already refreshed the folder.
 
 ### `--json`, and why it is per-verb, not global
 
@@ -84,6 +93,25 @@ view, or the `--json` document); **progress** — the "Fetching"/"Syncing" bars 
 goes to stderr, and auto-hides when stdout isn't a terminal. So `grove overview
 --json | jq` stays pipe-clean while a human still sees progress.
 
+### Settings, cache, and the default-dir fallback (binary-owned)
+
+Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
+**binary**, so `grove-core` stays env-free and reusable:
+
+- **`config.rs`** — the grove file (`~/.config/grove/aliases`) and `setup`/`init`.
+  It also resolves the alias a user bound to a verb, which fills the `Hints` the
+  renderers use.
+- **`settings.rs`** — the settings file (`~/.config/grove/config`, same
+  `key = value` shape) and `grove configure`: `cache`, `cache_ttl`, `default_dir`.
+- **`cache.rs`** — fetch-freshness stamps under `~/.cache/grove`. `main.rs` asks
+  it whether a folder was fetched within the TTL and passes core a `fetch: bool`;
+  it re-stamps only when it actually fetched. Correct-by-construction: only the
+  slow network fetch is skipped — the cheap local ahead/behind + dirty reads are
+  always recomputed, so a cache hit never acts on stale local state.
+- **default-dir fallback** — when a multi-repo verb gets no folder and the current
+  directory is unrelated to git (not inside a repo, no immediate sub-repo),
+  `main.rs` substitutes `default_dir` and prints a dim note to stderr.
+
 ## `grove-core` module responsibilities
 
 - **`git`** — the only module that shells out to `git`. Going through the real
@@ -91,9 +119,12 @@ goes to stderr, and auto-hides when stdout isn't a terminal. So `grove overview
   all apply. `discover` finds the immediate sub-repos; `is_https`/`web_url`/
   `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo.
 - **`overview`** — the dashboard: discover, fetch ssh repos in parallel, classify
-  each into the roll-up buckets, render the aligned colour table + hints.
+  each into the roll-up buckets, render the aligned colour table + hints. Each repo
+  name is an OSC 8 `file://` link that opens the folder; the forge glyph links to
+  its web page.
 - **`sync`** — fast-forward-pull the strictly-behind and push the strictly-ahead
-  clean repos; `push_all` is the push-only, worktree-agnostic variant.
+  clean repos; `pull_all` (fast-forward every behind repo) and `push_all` (push
+  every ahead repo) are the worktree-agnostic single-direction variants.
 - **`tree`** — a dependency-free tree walk (dirs first, Nerd-Font icons, git repos
   flagged).
 - **`remote`** — preview and (after confirmation) rewrite HTTPS remotes to SSH,

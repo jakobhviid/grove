@@ -22,7 +22,9 @@ fn bare_grove_prints_the_suite_overview() {
         .success()
         .stdout(predicate::str::contains("git shortcuts + multi-repo tools"))
         .stdout(predicate::str::contains("grove overview"))
-        .stdout(predicate::str::contains("grove push-all"));
+        .stdout(predicate::str::contains("grove pull-all"))
+        .stdout(predicate::str::contains("grove push-all"))
+        .stdout(predicate::str::contains("grove configure"));
 }
 
 #[test]
@@ -33,6 +35,8 @@ fn example_defines_every_default_alias() {
         .assert()
         .success()
         .stdout(predicate::str::contains("lg   = grove overview"))
+        .stdout(predicate::str::contains("lgs  = grove sync"))
+        .stdout(predicate::str::contains("lgp  = grove pull-all"))
         .stdout(predicate::str::contains("lgpp = grove push-all"))
         .stdout(predicate::str::contains("gs  = grove status"));
 }
@@ -63,6 +67,52 @@ fn overview_json_on_an_empty_folder_is_valid() {
         .success()
         .stdout(predicate::str::contains("\"repos\": []"))
         .stdout(predicate::str::contains("\"summary\""));
+}
+
+#[test]
+fn pull_all_json_on_an_empty_folder_is_valid() {
+    let home = tempdir().unwrap();
+    let repos = tempdir().unwrap();
+    grove(home.path())
+        .args(["pull-all", "--json"])
+        .arg(repos.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"pulled\": []"))
+        .stdout(predicate::str::contains("\"overview\""));
+}
+
+#[test]
+fn configure_sets_gets_and_lists_settings() {
+    let home = tempdir().unwrap();
+    // A brand-new config home: listing shows the defaults, and unknown keys error.
+    grove(home.path())
+        .args(["configure"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cache"))
+        .stdout(predicate::str::contains("default_dir"));
+    grove(home.path())
+        .args(["configure", "nonsense", "x"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown setting"));
+    // cache validates its value.
+    grove(home.path())
+        .args(["configure", "cache", "maybe"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("on or off"));
+    // A set round-trips through the file and back out via a plain get.
+    grove(home.path()).args(["configure", "cache_ttl", "30"]).assert().success();
+    grove(home.path())
+        .args(["configure", "cache_ttl"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("30"));
+    let cfg = home.path().join("grove").join("config");
+    assert!(cfg.exists(), "settings file not written");
+    assert!(fs::read_to_string(&cfg).unwrap().contains("cache_ttl = 30"));
 }
 
 #[test]

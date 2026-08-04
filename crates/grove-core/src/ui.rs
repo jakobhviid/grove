@@ -46,6 +46,27 @@ pub fn link(url: &str, text: &str) -> String {
     format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
 }
 
+/// An OSC 8 link over `text` that opens the local `path` (a `file://` URL) —
+/// clicking a repo or folder name reveals it in the OS file manager, the
+/// counterpart to the forge glyph that opens the web page. Percent-encodes the
+/// two characters that would otherwise break a `file://` URL (`%` and space); a
+/// terminal without hyperlink support just shows `text`.
+pub fn open(path: &str, text: &str) -> String {
+    let encoded = path.replace('%', "%25").replace(' ', "%20");
+    link(&format!("file://{encoded}"), text)
+}
+
+/// A dim, secondary note to stderr — context like "no repos here, showing your
+/// default folder". Kept off stdout so `--json` and piped output stay clean,
+/// exactly like the progress bar.
+pub fn note(m: &str) {
+    if stderr_color() {
+        eprintln!("\x1b[90m{m}\x1b[0m");
+    } else {
+        eprintln!("{m}");
+    }
+}
+
 /// A friendly error line to stderr (red ✗), used instead of leaking raw git noise.
 pub fn err(m: &str) {
     let line = format!("✗ {m}");

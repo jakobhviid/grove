@@ -1,8 +1,8 @@
 //! `switch_ssh` (grove ssh): rewrite the HTTPS remotes of every repo under a
-//! folder to their SSH equivalents, so `lg`/`lgp`/`lgpp` can fetch and sync them
-//! (they flag HTTPS remotes and skip them). Previews every change and asks for
-//! confirmation before touching any config; the switch is trivially reversible
-//! with `git remote set-url`, but mutating remotes still earns an explicit yes.
+//! folder to their SSH equivalents, so `lg`/`lgs`/`lgp`/`lgpp` can fetch and sync
+//! them (they flag HTTPS remotes and skip them). Previews every change and asks
+//! for confirmation before touching any config; the switch is trivially
+//! reversible with `git remote set-url`, but mutating remotes still earns a yes.
 use crate::{git, overview, ui};
 use anyhow::Result;
 use rayon::prelude::*;
@@ -17,7 +17,7 @@ struct Change {
     to: String,
 }
 
-pub fn run(dir: Option<&Path>, assume_yes: bool) -> Result<()> {
+pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Result<()> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
@@ -46,7 +46,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool) -> Result<()> {
         println!("{}", ui::paint("90", "No HTTPS remotes to switch."));
         // Still show the dashboard so a bare `grove ssh` doubles as `grove overview`.
         let report = overview::collect(Some(dir), true)?;
-        overview::render_human(&report);
+        overview::render_human(&report, hints);
         return Ok(());
     }
 
@@ -77,7 +77,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool) -> Result<()> {
     // whose SSH auth isn't set up surfaces right away.
     println!();
     let report = overview::collect(Some(dir), true)?;
-    overview::render_human(&report);
+    overview::render_human(&report, hints);
     Ok(())
 }
 

@@ -27,21 +27,29 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("gp", "grove pull"),
     ("gpp", "grove push"),
     ("lg", "grove overview"),
-    ("lgp", "grove sync"),
+    ("lgs", "grove sync"),
+    ("lgp", "grove pull-all"),
     ("lgpp", "grove push-all"),
     ("lt", "grove tree"),
 ];
 
 /// Read an environment variable as a path, treating unset **and empty** the
 /// same (an empty `XDG_CONFIG_HOME`/`ZDOTDIR` must not become a relative path).
-fn env_path(key: &str) -> Option<PathBuf> {
+/// Shared with `settings`/`cache`, which key off the same env conventions.
+pub(crate) fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-fn config_path() -> PathBuf {
+/// `~/.config/grove` (honoring `XDG_CONFIG_HOME`) — the directory holding both the
+/// grove file (`aliases`) and the settings file (`config`).
+pub(crate) fn config_dir() -> PathBuf {
     let base = env_path("XDG_CONFIG_HOME")
         .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
-    base.join("grove").join("aliases")
+    base.join("grove")
+}
+
+fn config_path() -> PathBuf {
+    config_dir().join("aliases")
 }
 
 fn aliases() -> Vec<(String, String)> {
@@ -49,6 +57,27 @@ fn aliases() -> Vec<(String, String)> {
         Ok(text) => parse(&text),
         Err(_) => DEFAULTS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
     }
+}
+
+/// The aliases the user has actually configured, or `None` when there's no grove
+/// file yet. Unlike [`aliases`], this does **not** fall back to the built-in
+/// defaults: a missing file means the short aliases aren't active in any shell,
+/// which is exactly what the listings/hints need to know to nudge `grove setup`.
+fn configured_aliases() -> Option<Vec<(String, String)>> {
+    std::fs::read_to_string(config_path()).ok().map(|t| parse(&t))
+}
+
+/// Whether a grove file exists — i.e. the short aliases have been provisioned.
+pub(crate) fn is_configured() -> bool {
+    config_path().exists()
+}
+
+/// The alias name the user bound to `command` (e.g. `grove push-all`) in their
+/// grove file, or `None` if there's no file or nothing maps to it. Honors renames
+/// (`gv = grove overview` resolves `grove overview` to `gv`), so the listings and
+/// hints always show the name the user actually types.
+pub(crate) fn alias_for(command: &str) -> Option<String> {
+    configured_aliases()?.into_iter().find(|(_, c)| c == command).map(|(n, _)| n)
 }
 
 /// Default aliases whose *name* is absent from an existing grove file — the set
@@ -107,8 +136,9 @@ fn confirm(question: &str) -> bool {
     matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
 }
 
-/// Parse `name = command` lines; ignore blanks and `#` comments.
-fn parse(text: &str) -> Vec<(String, String)> {
+/// Parse `name = command` lines; ignore blanks and `#` comments. Shared with the
+/// settings file (`settings.rs`), which uses the same `key = value` shape.
+pub(crate) fn parse(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| {
             let line = line.trim();
@@ -380,10 +410,13 @@ gcp = grove commit --all --push
 gp  = grove pull
 gpp = grove push
 
-# The multi-repo / tree tools. `lg` in particular clashes with lazygit — rename
-# it (or any of these) if you already use that name for something else.
+# The multi-repo / tree tools. `lgs` (sync) is the everyday one — it pulls the
+# behind repos and pushes the ahead ones; `lgp`/`lgpp` are the one-direction
+# escape hatches. `lg` in particular clashes with lazygit — rename it (or any of
+# these) if you already use that name for something else.
 lg   = grove overview
-lgp  = grove sync
+lgs  = grove sync
+lgp  = grove pull-all
 lgpp = grove push-all
 lt   = grove tree
 
@@ -404,7 +437,7 @@ mod tests {
         // names, even remapped ones, alone.
         let old = "gs  = gst\ngcp = gc --all --push\n";
         let missing: Vec<&str> = missing_defaults(old).into_iter().map(|(n, _)| n).collect();
-        assert_eq!(missing, vec!["ga", "gc", "gp", "gpp", "lg", "lgp", "lgpp", "lt"]);
+        assert_eq!(missing, vec!["ga", "gc", "gp", "gpp", "lg", "lgs", "lgp", "lgpp", "lt"]);
     }
 
     #[test]
