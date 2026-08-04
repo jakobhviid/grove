@@ -75,7 +75,7 @@ straight to git, so flags, color, pager, signals, and exit codes are git's own.
 | `grove push [args]` | `gpp` | `git push` |
 | `grove overview [dir]` | `lg` | **Dashboard** of every repo in a folder: branch, ahead/behind, dirty counts, a clickable repo name that opens the folder, and a clickable forge icon linking to its web page — with a summary roll-up and next-step hints |
 | `grove sync [dir]` | `lgs` | **Sync**: fast-forward-pull the behind repos and push the ahead ones (only clean, in-sync ones), then show the dashboard |
-| `grove pull-all [dir]` | `lgp` | **Bulk pull**: fast-forward every repo that is behind, then show the dashboard (no push) |
+| `grove pull-all [dir]` | `lgp` | **Bulk pull**: pull every repo that is behind — fast-forwards the strictly-behind, and rebases/merges diverged ones per your `git pull` config (aborting cleanly on conflict); no push |
 | `grove push-all [dir]` | `lgpp` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
 | `grove tree [dir] [-a] [-l N]` | `lt` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon, folder names are clickable |
 | `grove ssh [dir] [-y]` | — | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `overview`/`sync`/`pull-all`/`push-all` can fetch them). Previews every change and asks first; `-y` skips the prompt |
@@ -165,11 +165,14 @@ co  = grove commit          # your own shortcuts, too
 - **Sync is conservative; pull-all / push-all are the escape hatches.** `grove
   sync` (`lgs`) only touches clean repos with an upstream: it fast-forward-pulls
   the ones strictly behind and pushes the ones strictly ahead. Dirty, diverged,
-  HTTPS, and upstream-less repos are left untouched. The single-direction pair do
-  one side each and skip diverged repos: `grove pull-all` (`lgp`) fast-forwards
-  every repo strictly behind (git refuses any pull that would clobber uncommitted
-  changes, so those simply stay behind), and `grove push-all` (`lgpp`) pushes
-  every repo strictly ahead — never pulling and not requiring a clean worktree.
+  HTTPS, and upstream-less repos are left untouched. **`grove pull-all` (`lgp`)
+  pulls every repo that is behind, diverged included** — it runs `git pull` in
+  each, so the strictly-behind fast-forward and the diverged rebase or merge
+  exactly as your own `git pull` config dictates. If a pull can't complete (a
+  conflict, or dirty tracked changes blocking a rebase) grove **aborts the
+  in-progress rebase/merge**, leaving that repo untouched and reported unpulled, so
+  a fleet pull never strands a repo half-applied. **`grove push-all` (`lgpp`)**
+  pushes every repo strictly ahead — never pulling, no clean worktree required.
 - **Fast on big fleets.** Fetching runs on a wide pool (network-bound, not
   CPU-bound), and a **per-repo cache** (on by default) skips re-fetching any repo a
   recent fetch left fully settled — clean and in sync. Anything dirty, ahead,

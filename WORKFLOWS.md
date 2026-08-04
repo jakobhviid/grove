@@ -29,7 +29,7 @@ grove push                # git push
 
 grove overview [dir] [-f]  # dashboard of every repo in a folder (alias: lg)
 grove sync    [dir] [-f]   # pull the behind + push the ahead clean repos, then overview (alias: lgs)
-grove pull-all [dir] [-f]  # fast-forward every repo that is behind, then overview (alias: lgp)
+grove pull-all [dir] [-f]  # pull every behind repo (ff + rebase/merge diverged per your git config), then overview (alias: lgp)
 grove push-all [dir] [-f]  # push every repo with unpushed commits, then overview (alias: lgpp)
                            #   -f / --force: re-fetch every repo, bypassing the per-repo cache
 grove tree    [dir] [-a] [-l N]   # tree view; git repos get a git icon (alias: lt)
@@ -186,7 +186,7 @@ gp ; gpp                   # pull ; push
 ```sh
 lg ~/src                   # dashboard: branch, ahead/behind, dirty, forge link, HTTPS flags
 lgs ~/src                  # sync: fast-forward the behind ones, push the ahead ones
-lgp ~/src                  # pull-all: just fast-forward everything that's behind
+lgp ~/src                  # pull-all: pull everything behind (ff + rebase/merge diverged per your git config)
 lgpp ~/src                 # push-all: just push everything with unpushed commits
 grove ssh ~/src            # rewrite any HTTPS remotes to SSH (previews & asks; -y to skip)
 ```

@@ -212,22 +212,29 @@ pub fn fetch(repo: &Path) {
         .output();
 }
 
+/// `git pull` (honoring the user's `pull.rebase`/`pull.ff` config — grove doesn't
+/// impose a strategy, so a fleet pull behaves exactly like `git pull` in each repo).
+/// If it fails part-way — a rebase or merge that hit a conflict — abort the
+/// in-progress operation so a bulk pull never strands a repo half-applied; the repo
+/// is left as it was and reported unpulled. Returns whether the pull succeeded.
 pub fn pull(repo: &Path) -> Result<bool> {
-    Ok(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["pull", "--quiet"])
-        .status()?
-        .success())
+    // Capture (and drop) output rather than inheriting it: a conflicting rebase
+    // otherwise dumps git's "CONFLICT …" wall into the middle of the fleet result.
+    // The dashboard reprints each repo's state afterwards, so quiet keeps it clean.
+    let ok = Command::new("git").arg("-C").arg(repo).args(["pull", "--quiet"]).output()?.status.success();
+    if !ok {
+        // No-ops when nothing is in progress; one of them cleans up on a conflict.
+        for op in [["rebase", "--abort"], ["merge", "--abort"]] {
+            let _ = Command::new("git").arg("-C").arg(repo).args(op).output();
+        }
+    }
+    Ok(ok)
 }
 
 pub fn push(repo: &Path) -> Result<bool> {
-    Ok(Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["push", "--quiet"])
-        .status()?
-        .success())
+    // Capture output (see `pull`): a rejected push shouldn't leak `! [rejected]`
+    // noise into the fleet result — the reprinted dashboard shows what moved.
+    Ok(Command::new("git").arg("-C").arg(repo).args(["push", "--quiet"]).output()?.status.success())
 }
 
 #[cfg(test)]

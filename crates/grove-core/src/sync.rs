@@ -1,8 +1,10 @@
 //! The multi-repo actions, driven off a already-collected [`overview::Report`]:
 //! `sync` (the `lgs` alias) fast-forward-pulls the strictly-behind and pushes the
-//! strictly-ahead **clean, in-sync** repos; `pull_all` (`lgp`) fast-forwards every
-//! strictly-behind repo; `push_all` (`lgpp`) pushes every strictly-ahead one. So
-//! `sync` ≈ `pull_all` + `push_all` restricted to the clean repos.
+//! strictly-ahead **clean, in-sync** repos; `pull_all` (`lgp`) pulls **every**
+//! behind repo — fast-forwarding the strictly-behind and rebasing/merging the
+//! diverged per the user's `git pull` config (aborting cleanly on conflict);
+//! `push_all` (`lgpp`) pushes every strictly-ahead one. Each reports only the
+//! repos that actually moved.
 //!
 //! Fetching already happened in [`overview::collect`] (which fills the report),
 //! so these act purely on that report's ahead/behind — no network round-trip to
@@ -50,10 +52,17 @@ fn strictly_ahead(r: &overview::RepoStatus) -> bool {
     !r.https && matches!((r.ahead, r.behind), (Some(a), Some(0)) if a > 0)
 }
 
+/// Behind its upstream at all — strictly behind *or* diverged. `pull-all` pulls
+/// these; `git pull` fast-forwards the strictly-behind and rebases/merges the
+/// diverged per the user's config (aborting cleanly on conflict).
+fn behind(r: &overview::RepoStatus) -> bool {
+    !r.https && matches!(r.behind, Some(b) if b > 0)
+}
+
 /// `sync` (`lgs`): for every clean, in-sync repo, fast-forward-pull the ones only
 /// behind and push the ones only ahead. Dirty, diverged, https, and upstream-less
-/// repos are left untouched. Acts in parallel; swallows individual git errors (the
-/// re-collected overview shows what actually moved).
+/// repos are left untouched (use `pull-all` for the diverged ones). Acts in
+/// parallel; reports only the repos that actually moved.
 pub fn act_sync(report: &overview::Report) -> Vec<Synced> {
     let ops: Vec<(&overview::RepoStatus, &'static str)> = report
         .repos
@@ -73,32 +82,42 @@ pub fn act_sync(report: &overview::Report) -> Vec<Synced> {
         return Vec::new();
     }
     let pb = ui::bar(ops.len() as u64, "Syncing");
-    ops.par_iter().for_each(|(r, op)| {
-        let _ = match *op {
-            "pull" => git::pull(Path::new(&r.path)),
-            _ => git::push(Path::new(&r.path)),
-        };
-        pb.inc(1);
-    });
+    let synced: Vec<Synced> = ops
+        .par_iter()
+        .filter_map(|(r, op)| {
+            let ok = match *op {
+                "pull" => git::pull(Path::new(&r.path)),
+                _ => git::push(Path::new(&r.path)),
+            }
+            .unwrap_or(false);
+            pb.inc(1);
+            ok.then(|| Synced { name: r.name.clone(), op })
+        })
+        .collect();
     pb.finish_and_clear();
-    ops.iter().map(|(r, op)| Synced { name: r.name.clone(), op }).collect()
+    synced
 }
 
-/// `pull_all` (`lgp`): fast-forward every repo strictly behind its upstream. A
-/// pure ff (no local commits to reconcile); git refuses any that would clobber
-/// uncommitted changes, so a dirty behind repo is attempted and simply left as-is.
+/// `pull_all` (`lgp`): pull every repo behind its upstream — strictly-behind ones
+/// fast-forward, diverged ones rebase/merge per the user's `git pull` config. On a
+/// conflict (or dirty tracked changes blocking a rebase) the pull aborts cleanly
+/// and the repo is left untouched, so the fleet never ends up half-applied.
 pub fn act_pull_all(report: &overview::Report) -> Vec<String> {
-    let to_pull: Vec<&overview::RepoStatus> = report.repos.iter().filter(|r| strictly_behind(r)).collect();
+    let to_pull: Vec<&overview::RepoStatus> = report.repos.iter().filter(|r| behind(r)).collect();
     if to_pull.is_empty() {
         return Vec::new();
     }
     let pb = ui::bar(to_pull.len() as u64, "Pulling");
-    to_pull.par_iter().for_each(|r| {
-        let _ = git::pull(Path::new(&r.path));
-        pb.inc(1);
-    });
+    let pulled: Vec<String> = to_pull
+        .par_iter()
+        .filter_map(|r| {
+            let ok = git::pull(Path::new(&r.path)).unwrap_or(false);
+            pb.inc(1);
+            ok.then(|| r.name.clone())
+        })
+        .collect();
     pb.finish_and_clear();
-    to_pull.iter().map(|r| r.name.clone()).collect()
+    pulled
 }
 
 /// `push_all` (`lgpp`): push every repo strictly ahead of its upstream — never
@@ -110,12 +129,16 @@ pub fn act_push_all(report: &overview::Report) -> Vec<String> {
         return Vec::new();
     }
     let pb = ui::bar(to_push.len() as u64, "Pushing");
-    to_push.par_iter().for_each(|r| {
-        let _ = git::push(Path::new(&r.path));
-        pb.inc(1);
-    });
+    let pushed: Vec<String> = to_push
+        .par_iter()
+        .filter_map(|r| {
+            let ok = git::push(Path::new(&r.path)).unwrap_or(false);
+            pb.inc(1);
+            ok.then(|| r.name.clone())
+        })
+        .collect();
     pb.finish_and_clear();
-    to_push.iter().map(|r| r.name.clone()).collect()
+    pushed
 }
 
 pub fn render_human(report: &SyncReport, hints: &overview::Hints) {

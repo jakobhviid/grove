@@ -30,6 +30,13 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **`pull-all` pulls diverged repos too.** It filtered to strictly-behind, so a
+  diverged repo (`↑n ↓m`) was skipped even though a plain `git pull` (with the
+  user's `pull.rebase`) resolves it. Now it runs `git pull` in every behind repo —
+  ff for strictly-behind, rebase/merge for diverged per the user's config — and on
+  a conflict (or dirty tracked changes) aborts the in-progress rebase/merge so no
+  repo is left half-applied. Fleet pull/push now capture git's output (no conflict
+  wall leaking) and report only the repos that actually moved.
 - **Fleet fetch: per-repo cache + wide parallelism.** Fetching now runs on a
   network-sized pool (not the CPU-sized one), and a per-repo cache (on by default)
   skips re-fetching any repo a recent fetch left fully settled — dirty/ahead/behind/

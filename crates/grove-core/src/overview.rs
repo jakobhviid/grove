@@ -410,7 +410,7 @@ fn render_summary(report: &Report, hints: &Hints) {
         lines.push(format!("{} switches {} to SSH: {}", token(&hints.ssh, "grove ssh"), https_names.len(), https_names.join(", ")));
     }
     if summary.diverged > 0 {
-        lines.push(format!("{} diverged — reconcile by hand", summary.diverged));
+        lines.push(format!("{} pulls {} diverged too (git pull per your config; conflicts still need a hand)", token(&hints.pull_all, "grove pull-all"), summary.diverged));
     }
     for line in lines {
         println!("  {} {}", ui::paint("36", "→"), line);
