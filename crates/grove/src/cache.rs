@@ -1,13 +1,17 @@
-//! Fetch-freshness cache. The multi-repo verbs' slow part is the network fetch;
-//! after one runs, it stamps the folder, and a follow-up on the same folder
-//! within the TTL skips its own fetch — the remote-tracking refs are already
-//! fresh, and the cheap local ahead/behind + dirty reads are always recomputed,
-//! so decisions never go stale on your own edits.
+//! Per-repo fetch cache for fleet operations. Fetching is the slow part of the
+//! multi-repo verbs (one SSH handshake per repo), so we skip re-fetching a repo
+//! that a recent *real* fetch already left fully **settled** (clean worktree, in
+//! sync, ssh) — those are the quiet repos with nothing to act on. Anything dirty,
+//! ahead, behind, diverged, or https always re-fetches, so the repos you act on
+//! are never stale; only the "nothing to do here" rows can lag, and only for the
+//! TTL (default 5s). `--force` bypasses it.
 //!
-//! It lives in the binary (like `config`/`settings`, it's an env/XDG concern):
-//! `grove-core` stays free of the environment and just receives a `fetch: bool`.
-//! The stamp is a zero-byte file under `~/.cache/grove/` whose **modification
-//! time** is the timestamp — no parsing, and `write` refreshes mtime by truncating.
+//! Bounded by construction: a stamp records the last *real* fetch time and is
+//! never refreshed on a skip, so a repo re-fetches at most TTL seconds after its
+//! last actual fetch — skips can't chain indefinitely.
+//!
+//! Lives in the binary (an env/XDG concern); the stamp is a zero-byte file under
+//! `~/.cache/grove/` whose modification time is the timestamp.
 use crate::config;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -21,32 +25,74 @@ fn cache_dir() -> Option<PathBuf> {
     Some(base.join("grove"))
 }
 
-/// The stamp file for `folder`: `fetch-<hash>` keyed by the folder's canonical
-/// path, so `.`, `~/src`, and the absolute path all resolve to one stamp. `None`
-/// when the folder can't be canonicalized (doesn't exist) or `$HOME` is unset.
-fn stamp_file(folder: &Path) -> Option<PathBuf> {
+/// The stamp file for one repo, under `dir`, keyed by the repo's canonical path.
+fn stamp_path(dir: &Path, repo: &Path) -> Option<PathBuf> {
     use std::hash::{Hash, Hasher};
-    let canon = std::fs::canonicalize(folder).ok()?;
+    let canon = std::fs::canonicalize(repo).ok()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     canon.hash(&mut h);
-    Some(cache_dir()?.join(format!("fetch-{:016x}", h.finish())))
+    Some(dir.join(format!("repo-{:016x}", h.finish())))
 }
 
-/// Whether `folder` was fetched no more than `ttl` ago — a cache hit means the
-/// caller can skip fetching. Any uncertainty (no stamp, unreadable mtime, clock
-/// skew) reports false, so we fetch rather than risk acting on stale remotes.
-pub fn is_fresh(folder: &Path, ttl: Duration) -> bool {
-    let Some(file) = stamp_file(folder) else { return false };
-    let Ok(modified) = std::fs::metadata(&file).and_then(|m| m.modified()) else { return false };
+fn stamp_file(repo: &Path) -> Option<PathBuf> {
+    stamp_path(&cache_dir()?, repo)
+}
+
+/// Whether `file`'s mtime is no more than `ttl` old. Any uncertainty (missing,
+/// unreadable, clock skew) is `false`, so we fetch rather than risk staleness.
+fn fresh(file: &Path, ttl: Duration) -> bool {
+    let Ok(modified) = std::fs::metadata(file).and_then(|m| m.modified()) else { return false };
     SystemTime::now().duration_since(modified).map(|age| age <= ttl).unwrap_or(false)
 }
 
-/// Record that `folder` was just fetched (best-effort — a cache we can't write is
-/// simply a cache miss next time, never an error).
-pub fn stamp(folder: &Path) {
-    let Some(file) = stamp_file(folder) else { return };
+/// Whether a real fetch left `repo` settled no more than `ttl` ago — a hit means
+/// its fetch can be skipped this run.
+pub fn settled_within(repo: &Path, ttl: Duration) -> bool {
+    stamp_file(repo).map(|f| fresh(&f, ttl)).unwrap_or(false)
+}
+
+/// Record that a real fetch just left `repo` settled (mtime = now). Best-effort.
+pub fn mark_settled(repo: &Path) {
+    let Some(file) = stamp_file(repo) else { return };
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     let _ = std::fs::write(&file, []);
+}
+
+/// Record that `repo` has pending work — drop any settled stamp so it always
+/// re-fetches until a later fetch finds it settled again. Best-effort.
+pub fn mark_unsettled(repo: &Path) {
+    if let Some(file) = stamp_file(repo) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settled_stamp_round_trips_and_respects_ttl() {
+        let cache = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap(); // must exist to canonicalize
+        let file = stamp_path(cache.path(), repo.path()).unwrap();
+
+        // Mark settled (write the stamp): fresh within a generous ttl, expired at 0.
+        std::fs::write(&file, []).unwrap();
+        assert!(fresh(&file, Duration::from_secs(60)), "just-written stamp should be fresh");
+        assert!(!fresh(&file, Duration::from_secs(0)), "ttl 0 means nothing is fresh");
+
+        // Unsettle (remove the stamp): never fresh.
+        std::fs::remove_file(&file).unwrap();
+        assert!(!fresh(&file, Duration::from_secs(60)), "removed stamp is not fresh");
+    }
+
+    #[test]
+    fn distinct_repos_get_distinct_stamps() {
+        let cache = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        assert_ne!(stamp_path(cache.path(), a.path()), stamp_path(cache.path(), b.path()));
+    }
 }

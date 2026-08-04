@@ -1,20 +1,15 @@
-//! `sync` (the `lgs` alias): for every clean, in-sync repo under a folder,
-//! fast-forward pull the ones that are only behind and push the ones that are
-//! only ahead — then show the overview. Repos that are dirty, diverged, https,
-//! or without an upstream are left untouched.
+//! The multi-repo actions, driven off a already-collected [`overview::Report`]:
+//! `sync` (the `lgs` alias) fast-forward-pulls the strictly-behind and pushes the
+//! strictly-ahead **clean, in-sync** repos; `pull_all` (`lgp`) fast-forwards every
+//! strictly-behind repo; `push_all` (`lgpp`) pushes every strictly-ahead one. So
+//! `sync` ≈ `pull_all` + `push_all` restricted to the clean repos.
 //!
-//! `push_all` (the `lgpp` alias) and `pull_all` (the `lgp` alias) are the
-//! one-direction variants for when you want manual control: push every strictly
-//! ahead repo, or fast-forward every strictly behind one. So `sync` is roughly
-//! `pull_all` + `push_all` restricted to the clean, in-sync repos.
-//!
-//! All three take a `fetch` flag (the caller sets it from the fetch-freshness
-//! cache — false skips the network round-trips when a recent `overview`/`sync`
-//! already refreshed the folder) and return a serializable report (the machine
-//! result behind `--json`) embedding the post-run [`overview::Report`];
-//! [`render_human`]/[`render_push`]/[`render_pull`] paint them.
+//! Fetching already happened in [`overview::collect`] (which fills the report),
+//! so these act purely on that report's ahead/behind — no network round-trip to
+//! decide, just the pull/push transfers. The binary re-collects with
+//! [`overview::Fetch::None`] afterward to show the post-action state, and pairs the
+//! result with [`render_human`]/[`render_push`]/[`render_pull`].
 use crate::{git, overview, ui};
-use anyhow::Result;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::path::Path;
@@ -47,88 +42,80 @@ pub struct PullReport {
     pub overview: overview::Report,
 }
 
-/// Fetch every ssh repo under `dir` in parallel (the slow part — a network
-/// round-trip each), with a progress bar. Skipped entirely when `fetch` is false,
-/// which the caller sets when the fetch-freshness cache says the folder was
-/// refreshed within the TTL; the local ahead/behind + dirty reads that follow are
-/// cheap and recomputed fresh regardless.
-fn fetch_all(repos: &[git::Repo], fetch: bool) {
-    if !fetch {
-        return;
-    }
-    let to_fetch: Vec<_> = repos.iter().filter(|r| !git::is_https(&r.path)).collect();
-    if !to_fetch.is_empty() {
-        let pb = ui::bar(to_fetch.len() as u64, "Fetching");
-        to_fetch.par_iter().for_each(|r| {
-            git::fetch(&r.path);
-            pb.inc(1);
-        });
-        pb.finish_and_clear();
-    }
+fn strictly_behind(r: &overview::RepoStatus) -> bool {
+    !r.https && matches!((r.ahead, r.behind), (Some(0), Some(b)) if b > 0)
 }
 
-pub fn run(dir: Option<&Path>, fetch: bool) -> Result<SyncReport> {
-    let dir = dir.unwrap_or_else(|| Path::new("."));
-    if !dir.is_dir() {
-        anyhow::bail!("not a directory: {}", dir.display());
-    }
-    let repos = git::discover(dir);
-    fetch_all(&repos, fetch);
+fn strictly_ahead(r: &overview::RepoStatus) -> bool {
+    !r.https && matches!((r.ahead, r.behind), (Some(a), Some(0)) if a > 0)
+}
 
-    // Decide what actually needs syncing: clean, ssh repos that are strictly
-    // behind (→ pull) or strictly ahead (→ push). Determined in parallel — cheap
-    // local git calls.
-    #[derive(Clone, Copy)]
-    enum Op {
-        Pull,
-        Push,
-    }
-    let to_sync: Vec<(&git::Repo, Op)> = repos
-        .par_iter()
+/// `sync` (`lgs`): for every clean, in-sync repo, fast-forward-pull the ones only
+/// behind and push the ones only ahead. Dirty, diverged, https, and upstream-less
+/// repos are left untouched. Acts in parallel; swallows individual git errors (the
+/// re-collected overview shows what actually moved).
+pub fn act_sync(report: &overview::Report) -> Vec<Synced> {
+    let ops: Vec<(&overview::RepoStatus, &'static str)> = report
+        .repos
+        .iter()
+        .filter(|r| !r.dirty())
         .filter_map(|r| {
-            if git::is_https(&r.path) || git::dirty(&r.path).any() {
-                return None;
-            }
-            let (ahead, behind) = git::ahead_behind(&r.path)?;
-            if behind > 0 && ahead == 0 {
-                Some((r, Op::Pull))
-            } else if ahead > 0 && behind == 0 {
-                Some((r, Op::Push))
+            if strictly_behind(r) {
+                Some((r, "pull"))
+            } else if strictly_ahead(r) {
+                Some((r, "push"))
             } else {
                 None
             }
         })
         .collect();
-
-    // The pull/push is the part that actually transfers data (and runs quiet),
-    // so give it its own progress bar.
-    let mut synced: Vec<Synced> = Vec::new();
-    if !to_sync.is_empty() {
-        let pb = ui::bar(to_sync.len() as u64, "Syncing");
-        to_sync.par_iter().for_each(|(r, op)| {
-            let _ = match op {
-                Op::Pull => git::pull(&r.path),
-                Op::Push => git::push(&r.path),
-            };
-            pb.inc(1);
-        });
-        pb.finish_and_clear();
-        synced = to_sync
-            .iter()
-            .map(|(r, op)| Synced {
-                name: r.name.clone(),
-                op: match op {
-                    Op::Pull => "pull",
-                    Op::Push => "push",
-                },
-            })
-            .collect();
+    if ops.is_empty() {
+        return Vec::new();
     }
+    let pb = ui::bar(ops.len() as u64, "Syncing");
+    ops.par_iter().for_each(|(r, op)| {
+        let _ = match *op {
+            "pull" => git::pull(Path::new(&r.path)),
+            _ => git::push(Path::new(&r.path)),
+        };
+        pb.inc(1);
+    });
+    pb.finish_and_clear();
+    ops.iter().map(|(r, op)| Synced { name: r.name.clone(), op }).collect()
+}
 
-    // We already fetched above, so collect the post-sync state without a second
-    // fetch (no duplicate "Fetching" bar).
-    let overview = overview::collect(Some(dir), false)?;
-    Ok(SyncReport { synced, overview })
+/// `pull_all` (`lgp`): fast-forward every repo strictly behind its upstream. A
+/// pure ff (no local commits to reconcile); git refuses any that would clobber
+/// uncommitted changes, so a dirty behind repo is attempted and simply left as-is.
+pub fn act_pull_all(report: &overview::Report) -> Vec<String> {
+    let to_pull: Vec<&overview::RepoStatus> = report.repos.iter().filter(|r| strictly_behind(r)).collect();
+    if to_pull.is_empty() {
+        return Vec::new();
+    }
+    let pb = ui::bar(to_pull.len() as u64, "Pulling");
+    to_pull.par_iter().for_each(|r| {
+        let _ = git::pull(Path::new(&r.path));
+        pb.inc(1);
+    });
+    pb.finish_and_clear();
+    to_pull.iter().map(|r| r.name.clone()).collect()
+}
+
+/// `push_all` (`lgpp`): push every repo strictly ahead of its upstream — never
+/// pulls, does not require a clean worktree, and skips diverged repos a plain push
+/// would reject.
+pub fn act_push_all(report: &overview::Report) -> Vec<String> {
+    let to_push: Vec<&overview::RepoStatus> = report.repos.iter().filter(|r| strictly_ahead(r)).collect();
+    if to_push.is_empty() {
+        return Vec::new();
+    }
+    let pb = ui::bar(to_push.len() as u64, "Pushing");
+    to_push.par_iter().for_each(|r| {
+        let _ = git::push(Path::new(&r.path));
+        pb.inc(1);
+    });
+    pb.finish_and_clear();
+    to_push.iter().map(|r| r.name.clone()).collect()
 }
 
 pub fn render_human(report: &SyncReport, hints: &overview::Hints) {
@@ -139,44 +126,15 @@ pub fn render_human(report: &SyncReport, hints: &overview::Hints) {
     overview::render_human(&report.overview, hints);
 }
 
-/// `push_all` (the `lgpp` alias): push every repo under a folder that has
-/// unpushed commits — strictly ahead of its upstream. Unlike `sync` it never
-/// pulls and does NOT require a clean worktree (pushing committed work is safe
-/// even with uncommitted changes present). Repos that are up-to-date, behind,
-/// diverged, https, or have no upstream are left alone.
-pub fn push_all(dir: Option<&Path>, fetch: bool) -> Result<PushReport> {
-    let dir = dir.unwrap_or_else(|| Path::new("."));
-    if !dir.is_dir() {
-        anyhow::bail!("not a directory: {}", dir.display());
+pub fn render_pull(report: &PullReport, hints: &overview::Hints) {
+    if report.pulled.is_empty() {
+        println!("{}", ui::paint("90", "Nothing to pull."));
+    } else {
+        for name in &report.pulled {
+            println!("  {} {}", ui::paint("32", "↓"), name);
+        }
     }
-    let repos = git::discover(dir);
-
-    // Fetch first so ahead/behind is accurate (don't push into a diverged remote).
-    fetch_all(&repos, fetch);
-
-    // Only strictly-ahead repos have something to push (skip diverged — a plain
-    // push would be rejected).
-    let to_push: Vec<&git::Repo> = repos
-        .par_iter()
-        .filter(|r| {
-            !git::is_https(&r.path)
-                && matches!(git::ahead_behind(&r.path), Some((ahead, behind)) if ahead > 0 && behind == 0)
-        })
-        .collect();
-
-    let mut pushed: Vec<String> = Vec::new();
-    if !to_push.is_empty() {
-        let pb = ui::bar(to_push.len() as u64, "Pushing");
-        to_push.par_iter().for_each(|r| {
-            let _ = git::push(&r.path);
-            pb.inc(1);
-        });
-        pb.finish_and_clear();
-        pushed = to_push.iter().map(|r| r.name.clone()).collect();
-    }
-
-    let overview = overview::collect(Some(dir), false)?;
-    Ok(PushReport { pushed, overview })
+    overview::render_human(&report.overview, hints);
 }
 
 pub fn render_push(report: &PushReport, hints: &overview::Hints) {
@@ -185,59 +143,6 @@ pub fn render_push(report: &PushReport, hints: &overview::Hints) {
     } else {
         for name in &report.pushed {
             println!("  {} {}", ui::paint("32", "↑"), name);
-        }
-    }
-    overview::render_human(&report.overview, hints);
-}
-
-/// `pull_all` (the `lgp` alias): the pull-only mirror of [`push_all`].
-/// Fast-forward every repo under a folder that is strictly *behind* its upstream
-/// (`behind > 0 && ahead == 0`). Since there are no local commits to reconcile,
-/// each pull is a pure fast-forward; git itself refuses any that would clobber
-/// uncommitted changes, so a dirty behind repo is attempted and simply left as-is
-/// if it can't advance (it stays visible as "behind" in the overview). Repos that
-/// are up-to-date, ahead, diverged, https, or without an upstream are left alone.
-pub fn pull_all(dir: Option<&Path>, fetch: bool) -> Result<PullReport> {
-    let dir = dir.unwrap_or_else(|| Path::new("."));
-    if !dir.is_dir() {
-        anyhow::bail!("not a directory: {}", dir.display());
-    }
-    let repos = git::discover(dir);
-
-    // Fetch first so ahead/behind is accurate before we decide what to pull.
-    fetch_all(&repos, fetch);
-
-    // Only strictly-behind repos have something to fast-forward (skip diverged —
-    // a plain pull there would merge, not fast-forward).
-    let to_pull: Vec<&git::Repo> = repos
-        .par_iter()
-        .filter(|r| {
-            !git::is_https(&r.path)
-                && matches!(git::ahead_behind(&r.path), Some((ahead, behind)) if behind > 0 && ahead == 0)
-        })
-        .collect();
-
-    let mut pulled: Vec<String> = Vec::new();
-    if !to_pull.is_empty() {
-        let pb = ui::bar(to_pull.len() as u64, "Pulling");
-        to_pull.par_iter().for_each(|r| {
-            let _ = git::pull(&r.path);
-            pb.inc(1);
-        });
-        pb.finish_and_clear();
-        pulled = to_pull.iter().map(|r| r.name.clone()).collect();
-    }
-
-    let overview = overview::collect(Some(dir), false)?;
-    Ok(PullReport { pulled, overview })
-}
-
-pub fn render_pull(report: &PullReport, hints: &overview::Hints) {
-    if report.pulled.is_empty() {
-        println!("{}", ui::paint("90", "Nothing to pull."));
-    } else {
-        for name in &report.pulled {
-            println!("  {} {}", ui::paint("32", "↓"), name);
         }
     }
     overview::render_human(&report.overview, hints);

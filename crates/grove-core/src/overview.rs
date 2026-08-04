@@ -59,16 +59,21 @@ pub struct RepoStatus {
     pub staged: u32,
     pub modified: u32,
     pub untracked: u32,
+    /// This row's remote state was served from the per-repo cache (its fetch was
+    /// skipped as recently-settled), not refreshed this run. Ephemeral display
+    /// state, so it's kept out of the `--json` document.
+    #[serde(skip)]
+    pub cached: bool,
 }
 
 impl RepoStatus {
-    fn dirty(&self) -> bool {
+    pub fn dirty(&self) -> bool {
         self.staged > 0 || self.modified > 0 || self.untracked > 0
     }
 
     /// A fully-clean, in-sync ssh repo — nothing needs attention, so the human
-    /// table leaves it un-bolded.
-    fn calm(&self) -> bool {
+    /// table leaves it un-bolded and the fetch cache may skip it next time.
+    pub fn calm(&self) -> bool {
         !self.https && !self.dirty() && matches!((self.ahead, self.behind), (Some(0), Some(0)))
     }
 }
@@ -125,54 +130,99 @@ fn token(alias: &Option<String>, long: &str) -> String {
     }
 }
 
-/// Discover the repos directly under `dir` and read each one's state, fetching
-/// the ssh repos first in parallel when `fetch`. Pure data: prints nothing but
-/// the shared "Fetching" progress bar (stderr). Render with [`render_human`], or
-/// serialize the [`Report`] as JSON.
-pub fn collect(dir: Option<&Path>, fetch: bool) -> Result<Report> {
+/// Whether — and per repo, which — remote-tracking refs to refresh before reading
+/// state. Fetching is the slow part, so the caller controls it precisely.
+pub enum Fetch<'a> {
+    /// Fetch every ssh repo (a fresh look, or `--force`).
+    All,
+    /// Fetch nothing — reuse the refs already on disk (e.g. re-reading state right
+    /// after a pull/push, where git already advanced the refs locally).
+    None,
+    /// Per-repo: fetch a repo only when the closure says so; repos it skips are
+    /// flagged `cached` (served from a recent fetch within the cache window).
+    Cache(&'a (dyn Fn(&Path) -> bool + Sync)),
+}
+
+impl Fetch<'_> {
+    fn wants(&self, repo: &Path) -> bool {
+        match self {
+            Fetch::All => true,
+            Fetch::None => false,
+            Fetch::Cache(f) => f(repo),
+        }
+    }
+    /// A skipped ssh repo is a "cache hit" only under `Cache`; under `None` it's a
+    /// deliberate post-action re-read, not stale.
+    fn tags_cached(&self) -> bool {
+        matches!(self, Fetch::Cache(_))
+    }
+}
+
+/// Run `work` on a thread pool sized for network I/O — more concurrency than
+/// cores, since each `git fetch` is a blocking SSH round-trip, not CPU work.
+/// Falls back to the default pool if a sized one can't be built.
+fn run_wide(n: usize, work: impl FnOnce() + Send) {
+    match rayon::ThreadPoolBuilder::new().num_threads(n.clamp(1, 32)).build() {
+        Ok(pool) => pool.install(work),
+        Err(_) => work(),
+    }
+}
+
+/// Discover the repos directly under `dir` and read each one's state. `fetch`
+/// decides which ssh repos get a fresh `git fetch` first (all, none, or per-repo
+/// via the cache). Pure data: prints nothing but the shared "Fetching" progress
+/// bar (stderr). Render with [`render_human`], or serialize the [`Report`] as JSON.
+pub fn collect(dir: Option<&Path>, fetch: Fetch) -> Result<Report> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
     let repos = git::discover(dir);
 
-    // Size the bar to the repos we'll actually fetch (ssh only — https are
-    // flagged, not fetched), so the count reflects real work: "Fetching 3/8".
-    let pb = if fetch {
-        let n = repos.iter().filter(|r| !git::is_https(&r.path)).count();
-        (n > 0).then(|| ui::bar(n as u64, "Fetching"))
-    } else {
-        None
-    };
+    // Classify remotes once, then decide per repo whether to fetch (https repos
+    // are flagged, never fetched).
+    let https: Vec<bool> = repos.par_iter().map(|r| git::is_https(&r.path)).collect();
+    let to_fetch: Vec<bool> = repos.iter().zip(&https).map(|(r, &h)| !h && fetch.wants(&r.path)).collect();
 
+    // Fetch phase — its own wide pool. Fetching is network-bound (one SSH
+    // handshake per repo), so overlapping many at once beats a cpu-sized pool.
+    let fetch_repos: Vec<&git::Repo> = repos.iter().zip(&to_fetch).filter(|(_, &f)| f).map(|(r, _)| r).collect();
+    if !fetch_repos.is_empty() {
+        let pb = ui::bar(fetch_repos.len() as u64, "Fetching");
+        run_wide(fetch_repos.len(), || {
+            fetch_repos.par_iter().for_each(|r| {
+                git::fetch(&r.path);
+                pb.inc(1);
+            });
+        });
+        pb.finish_and_clear();
+    }
+
+    // State phase — cheap local git reads for every repo.
+    let cached_tag = fetch.tags_cached();
     let repos: Vec<RepoStatus> = repos
         .par_iter()
-        .map(|r| {
-            let https = git::is_https(&r.path);
+        .enumerate()
+        .map(|(i, r)| {
             let branch = git::branch(&r.path);
             let web_url = git::web_url(&r.path);
             // Absolute path for the clickable-name file:// link; fall back to the
             // discovered path if canonicalization fails (e.g. a race removing it).
             let path = std::fs::canonicalize(&r.path).unwrap_or_else(|_| r.path.clone()).display().to_string();
-            if https {
+            if https[i] {
                 return RepoStatus {
                     name: r.name.clone(),
                     path,
                     branch,
-                    https,
+                    https: true,
                     web_url,
                     ahead: None,
                     behind: None,
                     staged: 0,
                     modified: 0,
                     untracked: 0,
+                    cached: false,
                 };
-            }
-            if fetch {
-                git::fetch(&r.path);
-                if let Some(pb) = &pb {
-                    pb.inc(1);
-                }
             }
             let ab = git::ahead_behind(&r.path);
             let dirty = git::dirty(&r.path);
@@ -180,19 +230,18 @@ pub fn collect(dir: Option<&Path>, fetch: bool) -> Result<Report> {
                 name: r.name.clone(),
                 path,
                 branch,
-                https,
+                https: false,
                 web_url,
                 ahead: ab.map(|(ahead, _)| ahead),
                 behind: ab.map(|(_, behind)| behind),
                 staged: dirty.staged,
                 modified: dirty.modified,
                 untracked: dirty.untracked,
+                // An ssh repo we skipped under Cache mode is served from cache.
+                cached: cached_tag && !to_fetch[i],
             }
         })
         .collect();
-    if let Some(pb) = pb {
-        pb.finish_and_clear();
-    }
 
     let summary = summarize(&repos);
     Ok(Report { dir: dir.display().to_string(), repos, summary })
@@ -340,6 +389,10 @@ fn render_summary(report: &Report, hints: &Hints) {
     add(summary.diverged, "diverged", "31");
     add(summary.https, "https", "31");
     add(summary.no_upstream, "no upstream", "90");
+    // Rows served from the fetch cache (not refreshed this run) — call them out so
+    // an unchanged table reads as "reused a recent fetch", never as frozen.
+    let cached = report.repos.iter().filter(|r| r.cached).count();
+    add(cached, "cached", "90");
     println!("\n  {}", parts.join(&sep));
 
     // Each hint names the command that clears that kind of work, in the caller's
@@ -361,6 +414,9 @@ fn render_summary(report: &Report, hints: &Hints) {
     }
     for line in lines {
         println!("  {} {}", ui::paint("36", "→"), line);
+    }
+    if cached > 0 {
+        println!("  {} {}", ui::paint("90", "→"), ui::paint("90", &format!("{cached} served from a recent fetch — `--force` to refetch")));
     }
     // When aliases aren't provisioned yet, the hints above showed the long forms —
     // point out that `grove setup` installs the short ones. Dropped once set up.

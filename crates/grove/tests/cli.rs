@@ -136,20 +136,22 @@ fn default_dir_fallback_runs_in_the_configured_folder_with_a_note() {
 }
 
 #[test]
-fn overview_stamps_the_fetch_cache() {
-    // A cache miss fetches and then stamps the folder, so a fetch-* file appears.
+fn overview_force_and_default_cache_both_run() {
+    // The per-repo cache is on by default; `--force` bypasses it. Both paths must
+    // produce a valid dashboard. (Cache stamping is unit-tested in cache.rs — it
+    // only marks fully-settled real repos, which an empty temp folder never has.)
     let home = tempdir().unwrap();
     let cache = tempdir().unwrap();
     let repos = tempdir().unwrap();
-    grove(home.path())
-        .env("XDG_CACHE_HOME", cache.path())
-        .args(["overview"])
-        .arg(repos.path())
-        .assert()
-        .success();
-    let stamp_dir = cache.path().join("grove");
-    let stamped = fs::read_dir(&stamp_dir).map(|rd| rd.count() > 0).unwrap_or(false);
-    assert!(stamped, "no fetch stamp written under {}", stamp_dir.display());
+    for args in [vec!["overview"], vec!["overview", "--force"]] {
+        grove(home.path())
+            .env("XDG_CACHE_HOME", cache.path())
+            .args(&args)
+            .arg(repos.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("No git repositories"));
+    }
 }
 
 #[test]

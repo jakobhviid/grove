@@ -3,8 +3,10 @@
 //! needs no new dependency. Three knobs, all optional — a missing file (or a
 //! missing key) just means the default:
 //!
-//! - `cache`       — fetch-freshness cache on/off (default **on**)
-//! - `cache_ttl`   — how many seconds a fetch stays fresh (default **5**)
+//! - `cache`       — per-repo fetch cache on/off (default **on**). Skips
+//!   re-fetching a repo a recent fetch left fully settled; repos with pending work
+//!   always re-fetch, and cached rows are marked. `--force` bypasses it.
+//! - `cache_ttl`   — how many seconds a settled repo stays cached (default **5**)
 //! - `default_dir` — folder the multi-repo verbs fall back to when the current
 //!   directory is unrelated to git (default **unset** — no fallback)
 //!
@@ -18,8 +20,8 @@ use std::time::Duration;
 /// Every recognized key, with its human blurb — the source of truth for
 /// validation and the `grove configure` listing.
 const KEYS: &[(&str, &str)] = &[
-    ("cache", "reuse a recent fetch instead of re-fetching (on/off)"),
-    ("cache_ttl", "seconds a fetch stays fresh for the cache"),
+    ("cache", "skip re-fetching repos left settled by a recent fetch (on/off, default on)"),
+    ("cache_ttl", "seconds a settled repo stays cached"),
     ("default_dir", "folder to use when the current one has no git repos"),
 ];
 
@@ -51,6 +53,10 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
+        // Cache on by default: it only skips repos a recent fetch left fully
+        // settled (the quiet ones with nothing to act on) and always re-fetches
+        // anything with pending work, so actionable state stays live; cached rows
+        // are marked, and `--force` bypasses it.
         Settings { cache: true, cache_ttl: DEFAULT_TTL, default_dir: None }
     }
 }

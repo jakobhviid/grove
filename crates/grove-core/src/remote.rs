@@ -45,7 +45,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Res
     if changes.is_empty() {
         println!("{}", ui::paint("90", "No HTTPS remotes to switch."));
         // Still show the dashboard so a bare `grove ssh` doubles as `grove overview`.
-        let report = overview::collect(Some(dir), true)?;
+        let report = overview::collect(Some(dir), overview::Fetch::All)?;
         overview::render_human(&report, hints);
         return Ok(());
     }
@@ -76,7 +76,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Res
     // visibly flips from the red HTTPS flag to a real sync state — and any repo
     // whose SSH auth isn't set up surfaces right away.
     println!();
-    let report = overview::collect(Some(dir), true)?;
+    let report = overview::collect(Some(dir), overview::Fetch::All)?;
     overview::render_human(&report, hints);
     Ok(())
 }

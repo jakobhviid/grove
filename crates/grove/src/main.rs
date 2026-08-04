@@ -85,6 +85,9 @@ enum Cmd {
         /// Emit the dashboard as JSON instead of the human table.
         #[arg(long)]
         json: bool,
+        /// Re-fetch every repo, bypassing the per-repo cache.
+        #[arg(short, long)]
+        force: bool,
     },
     /// Fast-forward-pull the behind repos and push the ahead ones (clean, in-sync only), then show the overview (alias: lgs).
     Sync {
@@ -93,6 +96,9 @@ enum Cmd {
         /// Emit what was synced (and the overview) as JSON.
         #[arg(long)]
         json: bool,
+        /// Re-fetch every repo, bypassing the per-repo cache.
+        #[arg(short, long)]
+        force: bool,
     },
     /// Fast-forward every repo in a folder that is behind its upstream (no push), then show the overview (alias: lgp).
     PullAll {
@@ -101,6 +107,9 @@ enum Cmd {
         /// Emit what was pulled (and the overview) as JSON.
         #[arg(long)]
         json: bool,
+        /// Re-fetch every repo, bypassing the per-repo cache.
+        #[arg(short, long)]
+        force: bool,
     },
     /// Push every repo in a folder that has unpushed commits (no pull), then show the overview (alias: lgpp).
     PushAll {
@@ -109,6 +118,9 @@ enum Cmd {
         /// Emit what was pushed (and the overview) as JSON.
         #[arg(long)]
         json: bool,
+        /// Re-fetch every repo, bypassing the per-repo cache.
+        #[arg(short, long)]
+        force: bool,
     },
     /// Tree view (dirs first, Nerd-Font icons); git repos get a git icon (alias: lt).
     Tree {
@@ -165,10 +177,10 @@ fn main() {
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
         Some(Cmd::Ssh { dir, yes }) => run(grove_core::remote::run(dir.as_deref(), yes, &hints())),
-        Some(Cmd::Overview { dir, json }) => run(cmd_overview(dir, json)),
-        Some(Cmd::Sync { dir, json }) => run(cmd_sync(dir, json)),
-        Some(Cmd::PullAll { dir, json }) => run(cmd_pull_all(dir, json)),
-        Some(Cmd::PushAll { dir, json }) => run(cmd_push_all(dir, json)),
+        Some(Cmd::Overview { dir, json, force }) => run(cmd_overview(dir, json, force)),
+        Some(Cmd::Sync { dir, json, force }) => run(cmd_sync(dir, json, force)),
+        Some(Cmd::PullAll { dir, json, force }) => run(cmd_pull_all(dir, json, force)),
+        Some(Cmd::PushAll { dir, json, force }) => run(cmd_push_all(dir, json, force)),
         Some(Cmd::Tree { dir, level, all, json }) => run(cmd_tree(dir, level, all, json)),
         Some(Cmd::Setup { shell, force }) => run(config::setup(shell, force)),
         Some(Cmd::Init { shell }) => config::init(shell),
@@ -193,32 +205,35 @@ fn hints() -> grove_core::overview::Hints {
     }
 }
 
-/// Everything the multi-repo verbs settle before calling core: the folder to act
-/// on (after the default-dir fallback), whether to fetch (a cache miss), and the
-/// cache key to stamp once we have.
-struct Plan {
-    dir: Option<PathBuf>,
-    key: PathBuf,
-    fetch: bool,
-    stamp: bool,
+/// Collect the dashboard, letting the per-repo cache decide which repos to fetch.
+/// With the cache on (and no `--force`), a repo left settled by a recent fetch is
+/// skipped; everything with pending work still fetches. After collecting we record
+/// each *fetched* repo's settled state (skipped ones keep their earlier stamp, so
+/// staleness stays bounded to the TTL). `--force` / cache-off fetch everything.
+fn fetch_collect(dir: Option<&Path>, force: bool, s: &settings::Settings) -> anyhow::Result<grove_core::overview::Report> {
+    use grove_core::overview::Fetch;
+    let ttl = s.ttl();
+    let want = move |repo: &Path| !cache::settled_within(repo, ttl);
+    let mode = if force || !s.cache { Fetch::All } else { Fetch::Cache(&want) };
+    let report = grove_core::overview::collect(dir, mode)?;
+    if s.cache {
+        mark_cache(&report);
+    }
+    Ok(report)
 }
 
-/// Apply the default-dir fallback, then let the fetch-freshness cache decide
-/// whether this run needs to fetch. Call [`Plan::done`] after the command runs.
-fn plan(dir: Option<PathBuf>) -> Plan {
-    let settings = settings::load();
-    let dir = resolve_dir(dir, &settings);
-    let key = dir.clone().unwrap_or_else(|| PathBuf::from("."));
-    let fetch = !(settings.cache && cache::is_fresh(&key, settings.ttl()));
-    Plan { stamp: fetch && settings.cache, dir, key, fetch }
-}
-
-impl Plan {
-    /// Stamp the cache if we actually fetched — so a follow-up verb on the same
-    /// folder within the TTL can skip its fetch.
-    fn done(&self) {
-        if self.stamp {
-            cache::stamp(&self.key);
+/// Update the per-repo cache from a freshly-collected report: a repo we fetched
+/// (not `cached`, not https) is stamped settled when calm, else its stamp is
+/// dropped so it keeps re-fetching. Repos served from cache are left untouched.
+fn mark_cache(report: &grove_core::overview::Report) {
+    for r in &report.repos {
+        if r.https || r.cached {
+            continue;
+        }
+        if r.calm() {
+            cache::mark_settled(Path::new(&r.path));
+        } else {
+            cache::mark_unsettled(Path::new(&r.path));
         }
     }
 }
@@ -242,10 +257,10 @@ fn resolve_dir(dir: Option<PathBuf>, settings: &settings::Settings) -> Option<Pa
 
 /// The multi-repo dashboard (`grove overview`, alias `lg`): resolve the folder,
 /// collect every repo's state, then render the human table or the JSON document.
-fn cmd_overview(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let p = plan(dir);
-    let report = grove_core::overview::collect(p.dir.as_deref(), p.fetch)?;
-    p.done();
+fn cmd_overview(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+    let s = settings::load();
+    let dir = resolve_dir(dir, &s);
+    let report = fetch_collect(dir.as_deref(), force, &s)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -254,41 +269,54 @@ fn cmd_overview(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `grove sync` (alias `lgs`): pull/push the clean, in-sync repos, then render.
-fn cmd_sync(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let p = plan(dir);
-    let report = grove_core::sync::run(p.dir.as_deref(), p.fetch)?;
-    p.done();
+/// `grove sync` (alias `lgs`): pull/push the clean, in-sync repos, then re-read
+/// (no fetch) and render the post-action dashboard.
+fn cmd_sync(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+    use grove_core::overview::Fetch;
+    let s = settings::load();
+    let dir = resolve_dir(dir, &s);
+    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let synced = grove_core::sync::act_sync(&report);
+    let overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    let out = grove_core::sync::SyncReport { synced, overview };
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        grove_core::sync::render_human(&report, &hints());
+        grove_core::sync::render_human(&out, &hints());
     }
     Ok(())
 }
 
 /// `grove pull-all` (alias `lgp`): fast-forward every behind repo, then render.
-fn cmd_pull_all(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let p = plan(dir);
-    let report = grove_core::sync::pull_all(p.dir.as_deref(), p.fetch)?;
-    p.done();
+fn cmd_pull_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+    use grove_core::overview::Fetch;
+    let s = settings::load();
+    let dir = resolve_dir(dir, &s);
+    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let pulled = grove_core::sync::act_pull_all(&report);
+    let overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    let out = grove_core::sync::PullReport { pulled, overview };
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        grove_core::sync::render_pull(&report, &hints());
+        grove_core::sync::render_pull(&out, &hints());
     }
     Ok(())
 }
 
 /// `grove push-all` (alias `lgpp`): push every ahead repo, then render.
-fn cmd_push_all(dir: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
-    let p = plan(dir);
-    let report = grove_core::sync::push_all(p.dir.as_deref(), p.fetch)?;
-    p.done();
+fn cmd_push_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+    use grove_core::overview::Fetch;
+    let s = settings::load();
+    let dir = resolve_dir(dir, &s);
+    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let pushed = grove_core::sync::act_push_all(&report);
+    let overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    let out = grove_core::sync::PushReport { pushed, overview };
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        grove_core::sync::render_push(&report, &hints());
+        grove_core::sync::render_push(&out, &hints());
     }
     Ok(())
 }

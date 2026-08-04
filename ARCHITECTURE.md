@@ -63,19 +63,22 @@ reimplementing anything.
 The data-producing tools separate *gathering* state from *rendering* it, so the
 same core call backs both the human table and `--json`:
 
-- `overview::collect(dir, fetch) -> Report`, `overview::render_human(&Report, &Hints)`
-- `sync::run(dir, fetch) -> SyncReport`, `sync::render_human(&SyncReport, &Hints)`
-- `sync::pull_all(dir, fetch) -> PullReport`, `sync::render_pull(&PullReport, &Hints)`
-- `sync::push_all(dir, fetch) -> PushReport`, `sync::render_push(&PushReport, &Hints)`
+- `overview::collect(dir, Fetch) -> Report`, `overview::render_human(&Report, &Hints)`
+- `sync::act_sync(&Report) -> Vec<Synced>`, `sync::render_human(&SyncReport, &Hints)`
+- `sync::act_pull_all(&Report) -> Vec<String>`, `sync::render_pull(&PullReport, &Hints)`
+- `sync::act_push_all(&Report) -> Vec<String>`, `sync::render_push(&PushReport, &Hints)`
 - `tree::collect(dir, level, all) -> TreeReport`, `tree::render_human(&TreeReport)`
 
-The `Report` types are `#[derive(Serialize)]`; the CLI renders JSON with a single
-`serde_json::to_string_pretty(&report)`. `sync`/`pull-all`/`push-all` embed the
-post-run `overview::Report`, so their JSON carries the dashboard as it stands
-afterwards. The renderers take a `Hints` (built in the binary from the grove file)
-so the `→` next-step hints name the user's actual aliases; the `fetch` flag is set
-by the binary from the fetch-freshness cache (`cache.rs`) — `false` skips the
-network round-trips when a recent run already refreshed the folder.
+`collect` owns the fetch: its `Fetch` arg is `All`, `None`, or `Cache(closure)`
+(fetch a repo only when the closure allows — the per-repo cache), and it runs the
+fetch on a wide pool since fetching is network-bound, not CPU-bound. The `sync`
+family acts purely off an already-collected `Report` — no network to *decide*, just
+the pull/push transfers — so the binary does **collect (fetch) → act → collect
+(`Fetch::None`, re-read post-action)**, and builds the `SyncReport`/`PullReport`/
+`PushReport` (each embedding the post-run dashboard) itself. The `Report` types are
+`#[derive(Serialize)]`; the CLI renders JSON with one `serde_json::to_string_pretty`.
+The renderers take a `Hints` (built in the binary from the grove file) so the `→`
+hints name the user's actual aliases.
 
 ### `--json`, and why it is per-verb, not global
 
@@ -103,11 +106,15 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   renderers use.
 - **`settings.rs`** — the settings file (`~/.config/grove/config`, same
   `key = value` shape) and `grove configure`: `cache`, `cache_ttl`, `default_dir`.
-- **`cache.rs`** — fetch-freshness stamps under `~/.cache/grove`. `main.rs` asks
-  it whether a folder was fetched within the TTL and passes core a `fetch: bool`;
-  it re-stamps only when it actually fetched. Correct-by-construction: only the
-  slow network fetch is skipped — the cheap local ahead/behind + dirty reads are
-  always recomputed, so a cache hit never acts on stale local state.
+- **`cache.rs`** — per-repo fetch cache, **on by default**. One zero-byte stamp
+  per repo under `~/.cache/grove` (mtime = last real fetch that left it settled).
+  `collect`'s cache closure skips a repo's fetch when it was settled within
+  `cache_ttl`; anything dirty/ahead/behind/diverged/https always re-fetches, so the
+  actionable repos stay live and only the quiet rows can lag (marked `cached`).
+  Bounded: `main.rs` re-stamps only repos it *fetched* — never on a skip — so a repo
+  re-fetches at most `cache_ttl` after its last real fetch. `--force` bypasses it.
+  This is a count-cutting complement to the wide fetch pool (skip most repos *and*
+  fetch the rest fast), not a freshness trade — the repos you act on are never stale.
 - **default-dir fallback** — when a multi-repo verb gets no folder and the current
   directory is unrelated to git (not inside a repo, no immediate sub-repo),
   `main.rs` substitutes `default_dir` and prints a dim note to stderr.
@@ -118,13 +125,13 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   git binary (not a library) means the user's config, credentials, and SSH agent
   all apply. `discover` finds the immediate sub-repos; `is_https`/`web_url`/
   `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo.
-- **`overview`** — the dashboard: discover, fetch ssh repos in parallel, classify
-  each into the roll-up buckets, render the aligned colour table + hints. Each repo
-  name is an OSC 8 `file://` link that opens the folder; the forge glyph links to
-  its web page.
-- **`sync`** — fast-forward-pull the strictly-behind and push the strictly-ahead
-  clean repos; `pull_all` (fast-forward every behind repo) and `push_all` (push
-  every ahead repo) are the worktree-agnostic single-direction variants.
+- **`overview`** — the dashboard: discover, fetch (per the `Fetch` policy) on a
+  wide pool, classify each repo into the roll-up buckets, render the aligned colour
+  table + hints. Each repo name is an OSC 8 `file://` link that opens the folder;
+  the forge glyph links to its web page.
+- **`sync`** — the actions, run off a collected `Report`: `act_sync` ff-pulls the
+  strictly-behind and pushes the strictly-ahead clean repos; `act_pull_all` /
+  `act_push_all` are the worktree-agnostic single-direction variants.
 - **`tree`** — a dependency-free tree walk (dirs first, Nerd-Font icons, git repos
   flagged).
 - **`remote`** — preview and (after confirmation) rewrite HTTPS remotes to SSH,

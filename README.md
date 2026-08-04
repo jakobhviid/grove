@@ -170,10 +170,14 @@ co  = grove commit          # your own shortcuts, too
   every repo strictly behind (git refuses any pull that would clobber uncommitted
   changes, so those simply stay behind), and `grove push-all` (`lgpp`) pushes
   every repo strictly ahead — never pulling and not requiring a clean worktree.
-- **Fast repeats.** After a multi-repo verb fetches a folder, a follow-up on the
-  same folder within a few seconds reuses that fetch instead of hitting the network
-  again — only the fetch is cached, so ahead/behind and dirty are always fresh.
-  Tune or disable it with `grove configure cache` / `cache_ttl`.
+- **Fast on big fleets.** Fetching runs on a wide pool (network-bound, not
+  CPU-bound), and a **per-repo cache** (on by default) skips re-fetching any repo a
+  recent fetch left fully settled — clean and in sync. Anything dirty, ahead,
+  behind, or diverged **always** re-fetches, so the repos you'd act on are never
+  stale; only the quiet rows can lag, for at most `cache_ttl` seconds (default 5),
+  and they're marked `cached` in the roll-up. `--force` (`-f`) re-fetches
+  everything; `grove configure cache off` disables it. On a settled fleet a repeat
+  run fetches only the handful of active repos.
 - **Tree (`grove tree`, alias `lt`)** has no external dependencies (no eza),
   lists directories before files, hides dotfiles unless `-a` is given, and makes
   folder names clickable (a `file://` link that opens the directory).

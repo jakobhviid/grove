@@ -27,10 +27,11 @@ grove commit <msg>        # git commit -m <msg>   (-a stage tracked, -p push aft
 grove pull                # git pull
 grove push                # git push
 
-grove overview [dir]      # dashboard of every repo in a folder (alias: lg)
-grove sync    [dir]       # pull the behind + push the ahead clean repos, then overview (alias: lgs)
-grove pull-all [dir]      # fast-forward every repo that is behind, then overview (alias: lgp)
-grove push-all [dir]      # push every repo with unpushed commits, then overview (alias: lgpp)
+grove overview [dir] [-f]  # dashboard of every repo in a folder (alias: lg)
+grove sync    [dir] [-f]   # pull the behind + push the ahead clean repos, then overview (alias: lgs)
+grove pull-all [dir] [-f]  # fast-forward every repo that is behind, then overview (alias: lgp)
+grove push-all [dir] [-f]  # push every repo with unpushed commits, then overview (alias: lgpp)
+                           #   -f / --force: re-fetch every repo, bypassing the per-repo cache
 grove tree    [dir] [-a] [-l N]   # tree view; git repos get a git icon (alias: lt)
 grove ssh     [dir] [-y]  # switch a folder's HTTPS remotes to SSH (previews & asks; -y skips)
 grove configure [key] [value]     # get/set settings: cache, cache_ttl, default_dir
@@ -205,14 +206,19 @@ sets one:
 grove configure                         # list every setting + its value
 grove configure default_dir ~/Developer # where the multi-repo verbs run when the
                                         #   current folder has no repos of its own
-grove configure cache off               # disable the fetch-freshness cache (default on)
-grove configure cache_ttl 10            # seconds a fetch stays fresh (default 5)
+grove configure cache off               # disable the per-repo fetch cache (default on)
+grove configure cache_ttl 10            # seconds a settled repo stays cached (default 5)
 ```
 
-- **`cache`** / **`cache_ttl`** — after a multi-repo verb fetches a folder, a
-  follow-up on the same folder within `cache_ttl` seconds reuses that fetch instead
-  of hitting the network again. Only the fetch is skipped; ahead/behind and dirty
-  are always recomputed, so it never acts on stale local state.
+- **`cache`** / **`cache_ttl`** — the **per-repo fetch cache** (on by default).
+  Fetching a fleet is the slow part, so grove skips re-fetching any repo a recent
+  fetch left fully **settled** (clean worktree, in sync, ssh). Anything dirty,
+  ahead, behind, diverged, or https **always** re-fetches — so the repos you act on
+  are never stale; only the quiet "nothing to do" rows can lag, for at most
+  `cache_ttl` seconds, and they're counted as `cached` in the roll-up. It's bounded
+  (a repo re-fetches within `cache_ttl` of its last real fetch, never chaining
+  skips) and pairs with the wide fetch pool: skip most repos, fetch the rest fast.
+  Pass `--force` (`-f`) on any multi-repo verb to re-fetch everything.
 - **`default_dir`** — when you run `lg`/`lgs`/`lgp`/`lgpp` in a folder that has
   nothing to do with git (not inside a repo, no repo subfolders), grove runs in
   this folder instead and prints a dim note saying so. An explicit `dir` argument
