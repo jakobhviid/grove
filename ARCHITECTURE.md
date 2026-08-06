@@ -103,7 +103,16 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
 
 - **`config.rs`** — the grove file (`~/.config/grove/aliases`) and `setup`/`init`.
   It also resolves the alias a user bound to a verb, which fills the `Hints` the
-  renderers use.
+  renderers use. `setup` ends by **activating** the aliases in the shell that ran
+  it — impossible to do directly (a process can't mutate its parent shell), so it
+  takes whichever of the two honest routes applies: with stdout piped it prints
+  the alias lines for `eval "$(grove setup)"` and moves its report to stderr (the
+  same discipline `init` follows); on a terminal it offers to `exec` a fresh
+  interactive shell in grove's place, which re-reads the rc. The handoff is
+  gated — a terminal, the shell `$SHELL` reports, something actually changed, not
+  already inside one (`GROVE_RELOADED`) — and `--reload`/`--no-reload` /
+  `GROVE_NO_RELOAD` override the prompt. Anything else falls back to printing the
+  one line to run, so the caller's shell is never replaced silently.
 - **`settings.rs`** — the settings file (`~/.config/grove/config`, same
   `key = value` shape) and `grove configure`: `cache`, `cache_ttl`, `default_dir`.
 - **`cache.rs`** — per-repo fetch cache, **on by default**. One zero-byte stamp

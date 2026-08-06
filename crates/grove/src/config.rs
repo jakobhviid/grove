@@ -2,6 +2,12 @@
 //! lines. `grove init <shell>` translates it into that shell's alias syntax. If
 //! no file exists, a built-in default set (gs/ga/gc/gcp/gp/gpp → the git verbs)
 //! is emitted, so it works out of the box.
+//!
+//! `grove setup` is the provisioner on top: it writes that file, adds the load
+//! line to your rc, and then — since no process can add aliases to the shell that
+//! launched it — offers to hand the terminal to a fresh shell that re-reads the
+//! rc, or emits the alias lines for `eval "$(grove setup)"` when stdout is piped.
+//! See [`activate`].
 use clap::ValueEnum;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -119,21 +125,63 @@ fn override_alias(text: &str, name: &str, default: &str) -> String {
     joined
 }
 
-/// Ask a yes/no question on the terminal, defaulting to no. Returns `false`
-/// without prompting when stdin/stdout isn't a TTY (e.g. piped in a script) —
-/// there `--force` is the way to apply changes non-interactively.
-fn confirm(question: &str) -> bool {
+/// True when `setup`'s stdout is **not** a terminal — the `eval "$(grove setup)"`
+/// form. Then stdout carries only shell code (the same discipline [`init`]
+/// follows) and every human line moves to stderr, so the caller's shell can
+/// evaluate the result while the person still reads the report.
+fn eval_mode() -> bool {
+    !io::stdout().is_terminal()
+}
+
+/// One line of `setup`'s human report: stdout normally, stderr in [`eval_mode`].
+/// (`ui::paint` keys colour off stdout, so the eval-mode report comes out plain —
+/// the right call anyway when stdout is being captured by a shell.)
+fn say(line: &str) {
+    if eval_mode() {
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
+    }
+}
+
+/// A question (no newline, flushed) on the same stream [`say`] writes to, so the
+/// answer is typed on the same line as the prompt.
+fn prompt(text: &str) {
     use std::io::Write;
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if eval_mode() {
+        eprint!("{text}");
+        let _ = io::stderr().flush();
+    } else {
+        print!("{text}");
+        let _ = io::stdout().flush();
+    }
+}
+
+/// Whether there's a human to ask: stdin to read the answer from, and a terminal
+/// on whichever stream we'd ask on (stdout normally, stderr when stdout carries
+/// shell code). Piped/scripted runs are never prompted — there `--force` and
+/// `--no-reload` are the controls.
+fn interactive() -> bool {
+    io::stdin().is_terminal() && (!eval_mode() || io::stderr().is_terminal())
+}
+
+/// Ask a yes/no question on the terminal; `default_yes` is what a bare Enter
+/// means. Returns `false` without prompting when there's no human ([`interactive`]),
+/// and on EOF/Ctrl-D — the safe answer for anything that edits files or replaces
+/// the process.
+fn confirm(question: &str, default_yes: bool) -> bool {
+    if !interactive() {
         return false;
     }
-    print!("  {question} [y/N] ");
-    let _ = io::stdout().flush();
+    prompt(&format!("  {question} {} ", if default_yes { "[Y/n]" } else { "[y/N]" }));
     let mut answer = String::new();
-    if io::stdin().read_line(&mut answer).is_err() {
-        return false;
+    match io::stdin().read_line(&mut answer) {
+        Ok(0) | Err(_) => false,
+        Ok(_) => match answer.trim().to_ascii_lowercase().as_str() {
+            "" => default_yes,
+            a => matches!(a, "y" | "yes"),
+        },
     }
-    matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
 }
 
 /// Parse `name = command` lines; ignore blanks and `#` comments. Shared with the
@@ -221,12 +269,45 @@ pub fn init(shell: Shell) {
 /// checks for it to stay idempotent — re-running never adds a second block.
 const MARKER: &str = "# grove — shell integration";
 
+/// Set in the environment of the shell `setup` hands off to, so a `grove setup`
+/// run *inside* that shell never offers to nest another one.
+const RELOADED: &str = "GROVE_RELOADED";
+
+/// What `setup` should do about the shell you ran it from, once the files are
+/// written. See [`activate`] for why this is a choice at all.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Reload {
+    /// The default: offer the handoff, but only on a terminal and only when
+    /// something actually changed.
+    Ask,
+    /// `--reload`: hand off without asking (still terminal-gated).
+    Always,
+    /// `--no-reload`, `GROVE_NO_RELOAD`, or `--force`: never — just print the
+    /// line to run.
+    Never,
+}
+
+impl Reload {
+    /// Resolve the two flags plus the `GROVE_NO_RELOAD` escape hatch. An explicit
+    /// flag always wins over the environment; `--force` (scripted, unattended)
+    /// implies "don't touch my shell" unless `--reload` says otherwise.
+    pub fn from_flags(reload: bool, no_reload: bool, force: bool) -> Self {
+        if reload {
+            Reload::Always
+        } else if no_reload || force || std::env::var_os("GROVE_NO_RELOAD").is_some_and(|v| !v.is_empty()) {
+            Reload::Never
+        } else {
+            Reload::Ask
+        }
+    }
+}
+
 /// `grove setup [shell]`: the one-stop provisioner. Writes the grove file if
 /// it's missing and appends an idempotent, marker-delimited block to the shell's
 /// rc that loads the aliases via `grove init` on every startup. Re-running is a
 /// no-op once the block is present. `init` stays the pure emitter this block
 /// calls; `setup` is the only thing that edits your files.
-pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
+pub fn setup(shell: Option<Shell>, force: bool, reload: Reload) -> anyhow::Result<()> {
     use grove_core::ui::paint;
     let shell = shell
         .or_else(detect_shell)
@@ -250,12 +331,10 @@ pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
         // (b) Reconcile divergent aliases first, so top-up sees the final name set.
         for (name, current, default) in divergent_defaults(&text) {
             let apply = force
-                || confirm(&format!(
-                    "{} is `{}` — reset to grove's default `{}`?",
-                    paint("36", name),
-                    paint("1", &current),
-                    paint("1", default),
-                ));
+                || confirm(
+                    &format!("{} is `{}` — reset to grove's default `{}`?", paint("36", name), paint("1", &current), paint("1", default)),
+                    false,
+                );
             if apply {
                 text = override_alias(&text, name, default);
                 overridden.push(name);
@@ -313,12 +392,13 @@ pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
         "added"
     };
 
-    println!("{} — {}", paint("1;32", "grove setup"), paint("1", sh));
-    println!();
-    println!("  {} {} {}", paint("36", "grove file"), paint("1", &format!("{file_status:<8}")), cfg.display());
+    let changed = file_status != "exists" || rc_status == "added";
+    say(&format!("{} — {}", paint("1;32", "grove setup"), paint("1", sh)));
+    say("");
+    say(&format!("  {} {} {}", paint("36", "grove file"), paint("1", &format!("{file_status:<8}")), cfg.display()));
     let note = |label: &str, names: &[&str]| {
         if !names.is_empty() {
-            println!("  {} {} {label}: {}", paint("36", &format!("{:<10}", "")), paint("1", &format!("{:<8}", "")), paint("1", &names.join(" ")));
+            say(&format!("  {} {} {label}: {}", paint("36", &format!("{:<10}", "")), paint("1", &format!("{:<8}", "")), paint("1", &names.join(" "))));
         }
     };
     note("topped up", &added);
@@ -329,21 +409,153 @@ pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
     } else {
         format!("added the `grove init {sh}` line")
     };
-    println!("  {} {} {}", paint("36", &format!("{:<10}", rc_name(shell))), paint("1", &format!("{rc_status:<8}")), rc_desc);
-    println!();
-    if file_status != "exists" || rc_status == "added" {
-        println!("Reload your shell to activate:  {}", paint("1", &reload_hint(shell, &rc)));
+    say(&format!("  {} {} {}", paint("36", &format!("{:<10}", rc_name(shell))), paint("1", &format!("{rc_status:<8}")), rc_desc));
+    if changed {
         let names: Vec<String> = aliases().into_iter().map(|(n, _)| n).collect();
-        println!("{}", paint("90", &format!("Aliases: {}", names.join(" "))));
-    } else {
-        println!("{}", paint("90", "Already set up — open a new shell if you haven't reloaded."));
+        say(&format!("  {} {} {}", paint("36", &format!("{:<10}", "aliases")), paint("1", &format!("{:<8}", "")), paint("90", &names.join(" "))));
     }
 
-    // 3) Offer to autodetect a `default_dir` (the folder the multi-repo verbs fall
+    // 3) The rc line is guarded by `command -v grove`, so an unreachable binary
+    //    makes the whole integration a silent no-op. Say so now rather than let it
+    //    surface later as "the aliases don't work".
+    check_path();
+
+    // 4) Offer to autodetect a `default_dir` (the folder the multi-repo verbs fall
     //    back to). The fallback is inert without one, and most people have a single
     //    repo folder we can find. Interactive only, and never when a default is set.
     suggest_default_dir(force);
+
+    // 5) Leave the shell you ran this from actually able to use the aliases. Last,
+    //    because a handoff replaces this process and nothing after it would run.
+    activate(shell, reload, changed, &rc);
     Ok(())
+}
+
+/// Step 5 of [`setup`]: make the aliases usable in the session you just ran it
+/// from, not only in the next one. A process can never modify its parent shell,
+/// so there are exactly two honest ways to do it, and we take whichever applies:
+///
+/// - **`eval "$(grove setup)"`** — stdout isn't a terminal, so we print the alias
+///   lines and the caller's own shell evaluates them. Nothing is nested, nothing
+///   is replaced; this is the form for dotfiles and provisioning scripts.
+/// - **a handoff** — we `exec` a fresh interactive shell in place of grove, so it
+///   re-reads the rc we just wrote and the aliases are live. That shell is *new*,
+///   nested in the one you started from (`exit` returns to it), which is why we
+///   ask first and say so plainly.
+///
+/// Everything else — no terminal, `--no-reload`, a shell that isn't the one you
+/// are running, or already inside a handoff — falls back to printing the one line
+/// to run. We never silently replace the caller's shell.
+fn activate(shell: Shell, mode: Reload, changed: bool, rc: &Path) {
+    use grove_core::ui::paint;
+    say("");
+    if eval_mode() {
+        // stdout is a pipe: emit what `grove init` would, so `eval "$(grove setup)"`
+        // provisions *and* activates in one step. Piped-but-not-eval'd (a redirect
+        // to a file) is harmless — the lines just land there.
+        for (name, cmd) in aliases() {
+            println!("{}", alias_line(shell, &name, &cmd));
+        }
+        say(&paint("90", "Alias lines written to stdout — run via `eval \"$(grove setup)\"` and they are live in this shell now."));
+        return;
+    }
+    let hint = || say(&format!("Reload your shell to activate:  {}", paint("1", &reload_hint(shell, rc))));
+    if !changed && mode != Reload::Always {
+        say(&paint("90", "Already set up — open a new shell if you haven't reloaded, or run `grove setup --reload`."));
+        return;
+    }
+    // Only ever hand off into the shell the user actually runs, on a real
+    // terminal, and never a second level deep.
+    if mode == Reload::Never || !interactive() || !is_current_shell(shell) || std::env::var_os(RELOADED).is_some() {
+        hint();
+        return;
+    }
+    if mode == Reload::Ask && !confirm("Start a fresh shell now, with the aliases loaded?", true) {
+        hint();
+        return;
+    }
+    say(&format!("{} starting a new {} with the aliases loaded", paint("1;32", "→"), name_of(shell)));
+    say(&paint("90", "(it is nested in the shell you started from — `exit` returns there)"));
+    let e = exec_shell(shell); // only returns if the exec failed
+    grove_core::ui::err(&format!("couldn't start {}: {e}", name_of(shell)));
+    hint();
+}
+
+/// Replace this process with a fresh interactive shell, which re-reads the rc we
+/// just wrote — the only way a child process can leave the terminal in a shell
+/// that has the new aliases. Interactive but **not** a login shell: the login
+/// files already ran for the session we inherit our environment from, and re-running
+/// them would duplicate `PATH` entries; the rc (`.zshrc`/`.bashrc`/`config.fish`)
+/// is where our block lives. Returns only if the exec failed.
+fn exec_shell(shell: Shell) -> io::Error {
+    let mut cmd = std::process::Command::new(shell_program(shell));
+    cmd.arg("-i").env(RELOADED, "1");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.exec()
+    }
+    #[cfg(not(unix))]
+    {
+        io::Error::other(format!("{cmd:?}: shell handoff needs Unix exec"))
+    }
+}
+
+/// The shell binary to hand off to: `$SHELL` (so a custom build like
+/// `/opt/homebrew/bin/zsh` is honored), falling back to the bare name for a PATH
+/// lookup. Only called once [`is_current_shell`] agrees the two are the same shell.
+fn shell_program(shell: Shell) -> PathBuf {
+    env_path("SHELL").filter(|_| is_current_shell(shell)).unwrap_or_else(|| PathBuf::from(name_of(shell)))
+}
+
+/// Whether the shell we just provisioned is the one the user is actually running.
+/// `grove setup bash` from a zsh session prints the hint instead of dropping you
+/// into a shell you didn't ask for.
+fn is_current_shell(shell: Shell) -> bool {
+    detect_shell().is_some_and(|s| name_of(s) == name_of(shell))
+}
+
+/// Where the shell will find `grove`, if anywhere — an executable named `grove`
+/// on `PATH`.
+fn grove_on_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|dir| dir.join("grove")).find(|p| is_executable(p))
+}
+
+fn is_executable(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
+/// Warn when the shell integration can't reach `grove` at all (the rc line is
+/// guarded by `command -v grove`, so an off-PATH binary silently does nothing),
+/// or when it would reach a *different* grove than the one you just ran — the
+/// usual "I set up a dev build and the aliases point elsewhere" surprise.
+fn check_path() {
+    use grove_core::ui::paint;
+    let me = std::env::current_exe().ok();
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    match grove_on_path() {
+        None => {
+            say("");
+            say(&paint("1;33", "! `grove` is not on your PATH — the line we added to your rc is guarded, so it will do nothing."));
+            if let Some(dir) = me.as_deref().and_then(Path::parent) {
+                say(&paint("90", &format!("  add its folder, e.g.:  export PATH=\"{}:$PATH\"", dir.display())));
+            }
+        }
+        Some(found) => {
+            if me.as_deref().is_some_and(|m| canon(m) != canon(&found)) {
+                say(&paint("90", &format!("  note: your shell will run {} (you ran {})", found.display(), me.unwrap_or_default().display())));
+            }
+        }
+    }
 }
 
 /// After provisioning aliases, offer to set `default_dir` — the folder the
@@ -354,11 +566,7 @@ pub fn setup(shell: Option<Shell>, force: bool) -> anyhow::Result<()> {
 /// are never prompted or silently reconfigured.
 fn suggest_default_dir(force: bool) {
     use grove_core::ui::paint;
-    use std::io::Write;
-    if force || crate::settings::default_dir_configured() {
-        return;
-    }
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if force || crate::settings::default_dir_configured() || !interactive() {
         return;
     }
     let candidates = crate::settings::detect_candidates();
@@ -366,16 +574,15 @@ fn suggest_default_dir(force: bool) {
         return;
     }
 
-    println!();
-    println!("{}", paint("1", "Pick a default folder for the multi-repo commands (lg/lgs/lgp/lgpp):"));
+    say("");
+    say(&paint("1", "Pick a default folder for the multi-repo commands (lg/lgs/lgp/lgpp):"));
     let w = candidates.len().to_string().len();
     for (i, (path, repos)) in candidates.iter().enumerate() {
         let count = format!("{repos} git {}", if *repos == 1 { "repo" } else { "repos" });
         // Show `~/Developer`, not the noisy `/Users/you/Developer`.
-        println!("  {} {}  {}", paint("36", &format!("{:>w$})", i + 1)), crate::settings::tildify(path), paint("90", &count));
+        say(&format!("  {} {}  {}", paint("36", &format!("{:>w$})", i + 1)), crate::settings::tildify(path), paint("90", &count)));
     }
-    print!("  choose [1-{}], type a path, or Enter to skip: ", candidates.len());
-    let _ = io::stdout().flush();
+    prompt(&format!("  choose [1-{}], type a path, or Enter to skip: ", candidates.len()));
 
     let mut line = String::new();
     if io::stdin().read_line(&mut line).is_err() {
@@ -399,11 +606,11 @@ fn suggest_default_dir(force: bool) {
         Some(dir) => {
             let stored = crate::settings::tildify(&dir);
             match crate::settings::put("default_dir", &stored) {
-                Ok(()) => println!("  {} default_dir = {}", paint("1;32", "set"), paint("1", &stored)),
+                Ok(()) => say(&format!("  {} default_dir = {}", paint("1;32", "set"), paint("1", &stored))),
                 Err(e) => grove_core::ui::err(&format!("{e:#}")),
             }
         }
-        None => println!("  {}", paint("90", "skipped — set one later with `grove configure default_dir <path>`")),
+        None => say(&format!("  {}", paint("90", "skipped — set one later with `grove configure default_dir <path>`"))),
     }
 }
 

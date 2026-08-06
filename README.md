@@ -121,10 +121,38 @@ missing — and, on an existing file, tops up any default alias it's missing (th
 is how a 1.x file gains `lg`/`lgp`/`lgpp`/`lt`). It also appends **one
 idempotent, marker-delimited block** to your shell rc (`~/.zshrc`, `~/.bashrc`,
 or `~/.config/fish/config.fish`) that loads the aliases on every startup.
-Re-running never adds a second block. Then open a new shell.
+Re-running never adds a second block.
 
-Prefer to manage your own dotfiles? `grove init <shell>` just **prints** the
-alias lines (it changes nothing) — the block `grove setup` writes simply calls
+### Activating them in the shell you ran it from
+
+No program can add aliases to the shell that launched it — that shell has to
+evaluate them itself. So `grove setup` finishes by offering the handoff:
+
+```
+Start a fresh shell now, with the aliases loaded? [Y/n]
+```
+
+Say yes and grove replaces itself with a fresh interactive shell, which re-reads
+your rc — the aliases work immediately. It is a *new* shell nested in the one you
+started from, so `exit` returns there. `--reload` skips the question, and
+`--no-reload` (or `GROVE_NO_RELOAD=1`) declines it for good and just prints
+`source ~/.zshrc`. The offer only ever appears on a terminal, in the shell
+`$SHELL` says you run, and never twice over.
+
+Prefer no nested shell — or setting grove up from a dotfiles script? Let your own
+shell evaluate the result instead:
+
+```sh
+eval "$(grove setup)"          # zsh / bash — provisions AND activates, here
+grove setup | source           # fish
+```
+
+When stdout isn't a terminal, `grove setup` prints the alias lines there (exactly
+what `grove init` would) and moves its report to stderr, so it stays readable
+while the shell code stays clean.
+
+Prefer to manage your own dotfiles entirely? `grove init <shell>` just **prints**
+the alias lines and changes nothing — the block `grove setup` writes simply calls
 it:
 
 ```sh
@@ -203,7 +231,8 @@ clap-generated completions for `grove`.
 The full subcommands need no shell state, so **automation should call them
 directly** (aliases aren't expanded in scripts anyway): `grove commit -a -p
 "msg"`, `grove overview ~/repos --json`, `grove push-all ~/repos`, and so on.
-`grove setup` is safe to run unattended (idempotent, no prompts). `grove --llm`
+`grove setup` is safe to run unattended: with no terminal it prompts for nothing,
+never starts a shell, and stays idempotent. `grove --llm`
 prints a single self-contained, machine-readable guide — the command reference,
 ARCHITECTURE, a WORKFLOWS section, and this README — so an agent can drive the
 suite from zero.

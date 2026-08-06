@@ -244,6 +244,62 @@ fn setup_writes_the_grove_file_and_rc_block_idempotently() {
     assert!(!cfg.join("grove").join("config").exists(), "setup wrote a settings file non-interactively");
 }
 
+/// A `grove setup` in an isolated HOME/XDG tree, as a zsh user.
+fn setup_cmd(home: &std::path::Path, cfg: &std::path::Path) -> Command {
+    let mut cmd = Command::cargo_bin("grove").unwrap();
+    cmd.env("NO_COLOR", "1")
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", cfg)
+        .env("SHELL", "/bin/zsh")
+        .env_remove("ZDOTDIR")
+        .env_remove("GROVE_NO_RELOAD");
+    cmd
+}
+
+#[test]
+fn setup_piped_emits_alias_lines_for_eval_and_reports_on_stderr() {
+    // `eval "$(grove setup)"`: stdout must be pure shell code (so the caller's
+    // shell can evaluate it and have the aliases live immediately), with the whole
+    // human report moved to stderr — the same discipline `grove init` follows.
+    let home = tempdir().unwrap();
+    let cfg = home.path().join(".config");
+    let out = setup_cmd(home.path(), &cfg).args(["setup", "zsh"]).assert().success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(stdout.contains("alias lgs='grove sync'"), "missing alias line:\n{stdout}");
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(line.starts_with("alias "), "non-alias line leaked into piped setup: {line:?}");
+    }
+    assert!(stderr.contains("grove setup"), "report missing from stderr:\n{stderr}");
+    assert!(stderr.contains(".zshrc"), "report missing from stderr:\n{stderr}");
+}
+
+#[test]
+fn setup_reload_without_a_terminal_never_starts_a_shell() {
+    // `--reload` asks for the shell handoff, but with no terminal there is nobody
+    // to hand off *to* — it must fall back to the printed hint (and, since stdout
+    // is a pipe, the eval-able alias lines) rather than exec a shell into a pipe.
+    let home = tempdir().unwrap();
+    let cfg = home.path().join(".config");
+    let out = setup_cmd(home.path(), &cfg).args(["setup", "zsh", "--reload"]).assert().success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        assert!(line.starts_with("alias "), "unexpected output from a non-interactive --reload: {line:?}");
+    }
+}
+
+#[test]
+fn setup_warns_when_grove_is_not_on_path() {
+    // The rc line is guarded by `command -v grove`, so a grove the shell can't
+    // find makes the whole integration a silent no-op. Setup must say so.
+    let home = tempdir().unwrap();
+    let cfg = home.path().join(".config");
+    let empty = tempdir().unwrap();
+    let out = setup_cmd(home.path(), &cfg).env("PATH", empty.path()).args(["setup", "zsh"]).assert().success();
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("not on your PATH"), "missing PATH warning:\n{stderr}");
+}
+
 #[test]
 fn setup_force_offers_no_default_dir_even_with_a_repo_folder_present() {
     // Even when $HOME clearly has a repo folder, `--force` (scripts) must stay

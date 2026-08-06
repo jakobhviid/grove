@@ -30,6 +30,16 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **`grove setup` activates the aliases where you ran it.** Setup provisioned the
+  files and then left you in a shell that knew nothing about them. A process can't
+  add aliases to its parent shell, so setup now takes whichever honest route
+  applies: piped stdout emits the alias lines for `eval "$(grove setup)"` (report
+  moves to stderr, as in `init`); on a terminal it offers to `exec` a fresh
+  interactive shell that re-reads the rc. Gated on a terminal, the shell `$SHELL`
+  reports, an actual change, and not already inside a handoff (`GROVE_RELOADED`);
+  `--reload` / `--no-reload` / `GROVE_NO_RELOAD` override the prompt, and anything
+  ineligible falls back to printing the line to run. Setup also warns when `grove`
+  isn't on `PATH`, which silently neuters the guarded rc line.
 - **`pull-all` pulls diverged repos too.** It filtered to strictly-behind, so a
   diverged repo (`↑n ↓m`) was skipped even though a plain `git pull` (with the
   user's `pull.rebase`) resolves it. Now it runs `git pull` in every behind repo —

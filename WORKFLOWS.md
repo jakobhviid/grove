@@ -84,14 +84,53 @@ grove setup zsh           # or name it explicitly (zsh | bash | fish)
    (`~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`) that loads the
    aliases on every startup. Re-running never adds a second block.
 3. Prints exactly what it changed.
-4. If you have no `default_dir` yet, shows a short **menu of the repo folders it
+4. Warns if `grove` isn't on your `PATH` — the rc line is guarded by
+   `command -v grove`, so an unreachable binary would make the block a silent
+   no-op — and notes when the `grove` your shell will run isn't the one you just
+   ran (a dev build vs the installed one).
+5. If you have no `default_dir` yet, shows a short **menu of the repo folders it
    finds under your home** — ranked, with conventionally named dev folders
    (`~/Developer` / `~/src` / `~/code` …) first, then any other collection, top 5
    — and lets you pick one, type your own path, or press Enter to skip. What you
    pick becomes the folder the multi-repo verbs fall back to. Interactive only:
    scripts and `--force` are never prompted, and it's skipped once a default is set.
+6. Offers to **activate the aliases in the shell you ran it from** (below).
 
-Then open a new shell (or `source ~/.zshrc`). Now `gs`, `gc`, `lg`, `lt`, … work.
+### Activating without opening a new shell
+
+A process cannot add aliases to the shell that launched it; that shell has to
+evaluate them. `grove setup` therefore ends with:
+
+```
+Start a fresh shell now, with the aliases loaded? [Y/n]
+```
+
+Answering yes makes grove `exec` a fresh interactive shell in its own place, so
+your rc — and the aliases — are re-read and usable immediately. That shell is
+**new**, nested in the one you started from: `exit` returns there. grove only
+offers it on a terminal, only for the shell `$SHELL` says you run, only when
+something actually changed, and never inside a handoff it already made.
+
+| | |
+|---|---|
+| `grove setup --reload` | hand off without asking (also works when nothing changed) |
+| `grove setup --no-reload` | never hand off — just print `source ~/.zshrc` |
+| `GROVE_NO_RELOAD=1` | the same, for a dotfiles/bootstrap script |
+| `--force` | implies `--no-reload` |
+
+To activate **in the current shell** instead — no nesting — let your own shell
+evaluate setup's output:
+
+```sh
+eval "$(grove setup)"         # zsh / bash — provisions and activates, in place
+grove setup | source          # fish
+```
+
+When stdout isn't a terminal, `grove setup` writes the alias lines there (exactly
+what `grove init` emits) and its human report to stderr, so both stay usable.
+
+Either way you can also just open a new shell — the rc block loads the aliases at
+every startup. Now `gs`, `gc`, `lg`, `lt`, … work.
 
 ### Manual / explicit setup
 
@@ -124,9 +163,12 @@ Run `grove example` to print the starter file (it defines all the defaults).
 
 ## Unattended / scripted provisioning
 
-`grove setup` is safe for non-interactive use: it prompts for nothing, is
-idempotent, and exits non-zero only on real errors (e.g. `$HOME` unset). Pass
-`--force` to reconcile a divergent alias without the interactive prompt.
+`grove setup` is safe for non-interactive use: with no terminal it prompts for
+nothing and never starts a shell, it is idempotent, and it exits non-zero only on
+real errors (e.g. `$HOME` unset). Pass `--force` to reconcile a divergent alias
+without the interactive prompt (it also implies `--no-reload`). Note that piped
+stdout carries the alias lines, so redirect it (`>/dev/null`) if a script only
+wants the report.
 
 **Provision a shell in a container / image** (so an eventual interactive shell
 has the aliases):

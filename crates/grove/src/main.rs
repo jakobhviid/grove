@@ -136,12 +136,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Provision your shell: write the grove file and add the load line to your rc (idempotent). Auto-detects the shell if omitted.
+    /// Provision your shell: write the grove file and add the load line to your rc (idempotent). Auto-detects the shell if omitted. On a terminal it then offers to start a fresh shell so the aliases work right away; `eval "$(grove setup)"` activates them in the current one instead.
     Setup {
         shell: Option<config::Shell>,
-        /// Reconcile aliases that differ from grove's defaults without prompting (for scripts/non-interactive use).
+        /// Reconcile aliases that differ from grove's defaults without prompting (for scripts/non-interactive use). Implies --no-reload.
         #[arg(long)]
         force: bool,
+        /// Start the fresh shell without asking (the aliases are live immediately; `exit` returns to the shell you started from).
+        #[arg(long, conflicts_with = "no_reload")]
+        reload: bool,
+        /// Never start a shell — just print the line to run. Also settable as GROVE_NO_RELOAD=1.
+        #[arg(long = "no-reload")]
+        no_reload: bool,
     },
     /// Print shell aliases from your grove file (~/.config/grove/aliases) for eval. Add `eval "$(grove init zsh)"`.
     Init { shell: config::Shell },
@@ -182,7 +188,7 @@ fn main() {
         Some(Cmd::PullAll { dir, json, force }) => run(cmd_pull_all(dir, json, force)),
         Some(Cmd::PushAll { dir, json, force }) => run(cmd_push_all(dir, json, force)),
         Some(Cmd::Tree { dir, level, all, json }) => run(cmd_tree(dir, level, all, json)),
-        Some(Cmd::Setup { shell, force }) => run(config::setup(shell, force)),
+        Some(Cmd::Setup { shell, force, reload, no_reload }) => run(config::setup(shell, force, config::Reload::from_flags(reload, no_reload, force))),
         Some(Cmd::Init { shell }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
         Some(Cmd::Configure { key, value }) => run(settings::configure(key, value)),
