@@ -104,7 +104,16 @@ grove tree ~/src -l 1 --json | jq '.entries[] | select(.is_repo)'
 
 `sync --json`, `pull-all --json`, and `push-all --json` report what they touched
 **and** embed the post-run dashboard, so an agent can act and re-check in one
-call. The passthrough git verbs have no `--json` — they `exec` git, and git owns
+call. They also report what they **couldn't** touch, in `failed[]` (`name`, `path`,
+`op`, `kind`, `detail`), and every repo row carries `trouble`
+(`denied`/`unreachable`/`needs_hand`/`failed`, else `null`), `trouble_detail` —
+git's own line, verbatim — and `stale`, true when the row's ahead/behind predates
+a failed fetch. So a script can tell "nothing to pull" from "couldn't pull":
+
+```sh
+grove pull-all ~/src --json | jq -r '.failed[] | "\(.name): \(.kind) — \(.detail)"'
+grove overview ~/src --json | jq -r '.repos[] | select(.trouble == "denied") | .name'
+``` The passthrough git verbs have no `--json` — they `exec` git, and git owns
 their output.
 
 ## Shell aliases
@@ -186,6 +195,17 @@ co  = grove commit          # your own shortcuts, too
   (`N repos · X clean · Y dirty · Z to push …`) and `→` hints naming the command
   that clears each kind of pending work — in your own short aliases when they're
   installed, else the long `grove …` forms plus a one-line `grove setup` nudge.
+- **A repo git can't talk to says so.** When a fetch, pull, or push fails, that
+  repo gets a **mark in a column ahead of its name** — `⊘` no access to origin
+  (yellow), `⚠` needs a hand: conflict, local changes, rejected push (yellow), `↯`
+  remote unreachable (dim), `✗` git failed for some other reason (red) — and its
+  sync state is dimmed, because those counts are the last ones grove managed to
+  fetch. The column exists only while something is wrong, a **legend** under the
+  table spells out the marks it used, the roll-up counts them, and one `→` line per
+  repo quotes git's own explanation (`⊘ temper — no access to origin (Permission
+  denied (publickey))`). The action verbs list what they couldn't move next to what
+  they moved, so nothing fails silently. A repo in trouble is never treated as
+  settled, so the fetch cache can't hide its mark on the next run.
 - **HTTPS remotes are flagged, not fetched.** Any repo whose `origin` is still
   on HTTPS is called out and skipped during fetch/sync — run **`grove ssh`** to
   rewrite them all to SSH (it previews each change and asks before touching
@@ -214,7 +234,9 @@ co  = grove commit          # your own shortcuts, too
   lists directories before files, hides dotfiles unless `-a` is given, and makes
   folder names clickable (a `file://` link that opens the directory).
 - **Nerd Font icons** — use a Nerd Font for `grove tree` and the dashboard's
-  forge links to render correctly.
+  forge links to render correctly. The trouble marks are ordinary Unicode, one cell
+  wide, so the information you need when a repo is stuck renders in any monospace
+  font.
 - The git verbs `exec` git in place (leaving no wrapper process); outside a repo
   they print a friendly one-line error instead of git's `fatal:` wall of text.
 

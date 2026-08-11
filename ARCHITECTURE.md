@@ -64,10 +64,14 @@ The data-producing tools separate *gathering* state from *rendering* it, so the
 same core call backs both the human table and `--json`:
 
 - `overview::collect(dir, Fetch) -> Report`, `overview::render_human(&Report, &Hints)`
-- `sync::act_sync(&Report) -> Vec<Synced>`, `sync::render_human(&SyncReport, &Hints)`
-- `sync::act_pull_all(&Report) -> Vec<String>`, `sync::render_pull(&PullReport, &Hints)`
-- `sync::act_push_all(&Report) -> Vec<String>`, `sync::render_push(&PushReport, &Hints)`
+- `sync::act_sync(&Report) -> (Vec<Synced>, Vec<Failure>)`, `sync::render_human(&SyncReport, &Hints)`
+- `sync::act_pull_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_pull(&PullReport, &Hints)`
+- `sync::act_push_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_push(&PushReport, &Hints)`
 - `tree::collect(dir, level, all) -> TreeReport`, `tree::render_human(&TreeReport)`
+
+Every action returns what moved **and** what didn't: a repo git refused to move is
+a `Failure` (kind + git's own line), never an unexplained absence from the moved
+list.
 
 `collect` owns the fetch: its `Fetch` arg is `All`, `None`, or `Cache(closure)`
 (fetch a repo only when the closure allows — the per-repo cache), and it runs the
@@ -75,7 +79,11 @@ fetch on a wide pool since fetching is network-bound, not CPU-bound. The `sync`
 family acts purely off an already-collected `Report` — no network to *decide*, just
 the pull/push transfers — so the binary does **collect (fetch) → act → collect
 (`Fetch::None`, re-read post-action)**, and builds the `SyncReport`/`PullReport`/
-`PushReport` (each embedding the post-run dashboard) itself. The `Report` types are
+`PushReport` (each embedding the post-run dashboard) itself. Between those steps it
+calls `sync::settle`, which re-attaches to the re-read dashboard what the run
+learned about the remotes — the fetch's troubles, then the action's failures on top,
+as the newer verdict. The re-read deliberately doesn't fetch, so without that step a
+fleet would look untroubled seconds after being told otherwise. The `Report` types are
 `#[derive(Serialize)]`; the CLI renders JSON with one `serde_json::to_string_pretty`.
 The renderers take a `Hints` (built in the binary from the grove file) so the `→`
 hints name the user's actual aliases.
@@ -133,11 +141,22 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
 - **`git`** — the only module that shells out to `git`. Going through the real
   git binary (not a library) means the user's config, credentials, and SSH agent
   all apply. `discover` finds the immediate sub-repos; `is_https`/`web_url`/
-  `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo.
+  `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo. The three
+  remote operations return an `Option<Fail>` rather than a bool: `classify` sorts
+  git's stderr **and stdout** (a merge reports `CONFLICT` on stdout) into a
+  `Trouble` — `Denied`, `Unreachable`, `NeedsHand`, `Failed` — and `detail` picks the
+  one line worth showing, skipping hints, banner rules and bare `remote:` spacers.
+  Matching is on git's long-stable phrases, and an unrecognised message degrades to
+  `Failed` *with git's own words attached* — never to silence.
 - **`overview`** — the dashboard: discover, fetch (per the `Fetch` policy) on a
   wide pool, classify each repo into the roll-up buckets, render the aligned colour
   table + hints. Each repo name is an OSC 8 `file://` link that opens the folder;
-  the forge glyph links to its web page.
+  the forge glyph links to its web page. A repo carrying a `Trouble` gets a mark in
+  a leading flag column (present only when a row needs it), a legend naming the
+  marks used, a roll-up count, and a `→` line quoting git; its sync cell is dimmed
+  because those counts predate the failed fetch. The marks are plain Unicode, one
+  cell wide — unlike the decorative forge glyphs, a failure the reader can't see is
+  worse than no column, so they can't depend on a patched font.
 - **`sync`** — the actions, run off a collected `Report`: `act_sync` ff-pulls the
   strictly-behind and pushes the strictly-ahead clean repos; `act_pull_all` /
   `act_push_all` are the worktree-agnostic single-direction variants.

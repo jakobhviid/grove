@@ -3,6 +3,7 @@
 //! library) means the user's config, credentials, and SSH agent all apply —
 //! exactly matching the shell functions grove replaces.
 use anyhow::Result;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -199,47 +200,302 @@ pub fn dirty(repo: &Path) -> Dirty {
     d
 }
 
-pub fn fetch(repo: &Path) {
-    // Capture (and drop) output rather than inheriting stderr: a failed fetch —
-    // unreachable remote, missing ssh key — otherwise dumps git's `fatal:` wall
-    // into the middle of the dashboard. The dashboard shows each repo's state
-    // regardless, so a quiet fetch keeps the table clean, matching grove's
-    // one-line-error style elsewhere.
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["fetch", "--quiet"])
-        .output();
+/// Why a remote operation (fetch, pull, push) failed, in the four kinds a fleet
+/// view can act on. The kind decides the mark and color in the dashboard; the
+/// human-readable cause travels alongside it in [`Fail::detail`].
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum Trouble {
+    /// The remote refused us: no key, wrong key, no permission on the repo, or an
+    /// unverified host key. Persistent until the access is fixed.
+    Denied,
+    /// The remote couldn't be reached at all — DNS, timeout, refused connection.
+    /// Usually the network, not the repo, and usually transient.
+    Unreachable,
+    /// git stopped and wants a human: a conflict, local changes in the way, a
+    /// rejected push, a leftover lock file.
+    NeedsHand,
+    /// Anything we don't classify. The detail line carries git's own words.
+    Failed,
+}
+
+/// A failed git operation: what kind of trouble, and the one line worth showing.
+#[derive(Serialize, Clone, Debug)]
+pub struct Fail {
+    pub kind: Trouble,
+    /// git's own explanation, condensed to a single line (see [`detail`]).
+    pub detail: String,
+}
+
+/// Sort git's/ssh's stderr into a [`Trouble`]. Matching is on the stable, decades-old
+/// phrases (git keeps these for scripts and its own tests), lowercased so casing
+/// differences between transports don't matter. Order matters: the specific
+/// access/network phrases are tested before the generic ones, and anything
+/// unrecognized falls through to [`Trouble::Failed`] — which still shows the user
+/// git's own words, so a miss here degrades to "unclassified", never to silence.
+pub fn classify(stderr: &str) -> Trouble {
+    let s = stderr.to_ascii_lowercase();
+    let any = |needles: &[&str]| needles.iter().any(|n| s.contains(n));
+
+    // Access. GitHub answers "repository not found" for a private repo you can't
+    // see, so that phrase is a permission problem, not a missing repo. A host key
+    // that doesn't verify is also access: the transport refuses to talk.
+    if any(&[
+        "permission denied",
+        "authentication failed",
+        "denied to",
+        "access denied",
+        "repository not found",
+        "could not read username",
+        "could not read password",
+        "terminal prompts disabled",
+        "invalid username or password",
+        "403 forbidden",
+        "401 unauthorized",
+        // GitLab masks "no permission" as "could not be found or you don't have
+        // permission to view it"; Gitea/Forgejo say "not allowed".
+        "have permission",
+        "not allowed",
+        "not authorized",
+        "unauthorized",
+        "host key verification failed",
+        "remote host identification has changed",
+        "no supported authentication methods",
+    ]) {
+        return Trouble::Denied;
+    }
+    // Network.
+    if any(&[
+        "could not resolve host",
+        "couldn't connect to server",
+        "connection timed out",
+        "connection refused",
+        "connection closed by remote host",
+        "network is unreachable",
+        "no route to host",
+        "operation timed out",
+        "temporary failure in name resolution",
+        "failed to connect to",
+    ]) {
+        return Trouble::Unreachable;
+    }
+    // Needs a human.
+    if any(&[
+        "conflict",
+        "could not apply",
+        "automatic merge failed",
+        "would be overwritten",
+        "cannot pull with rebase",
+        "you have unstaged changes",
+        "needs merge",
+        "index.lock",
+        "another git process",
+        "non-fast-forward",
+        "[rejected]",
+        "updates were rejected",
+        "hook declined",
+        "protected branch",
+        "unmerged files",
+        "not possible to fast-forward",
+        "divergent branches",
+    ]) {
+        return Trouble::NeedsHand;
+    }
+    Trouble::Failed
+}
+
+/// Peel git's line prefixes off, however they stack — a forge speaking through the
+/// transport reaches us as `remote: ERROR: …`, so one pass isn't enough.
+fn strip_prefixes(line: &str) -> &str {
+    let mut line = line.trim();
+    while let Some(shorter) = ["fatal:", "error:", "ERROR:", "remote:", "warning:", "git:"].iter().find_map(|p| line.strip_prefix(p)) {
+        line = shorter.trim_start();
+    }
+    line
+}
+
+/// One output line, stripped of prefixes, if it explains anything — else `None`.
+/// Filtered out: git's hints and headers, the two-line "Please make sure you have
+/// the correct access rights" boilerplate that trails every failed handshake, a
+/// forge's `=====` banner rules, and bare `remote:` spacers.
+fn explaining(raw: &str) -> Option<&str> {
+    let raw = raw.trim();
+    const SCAFFOLD: [&str; 7] = ["hint:", "To ", "Auto-merging", "Everything up-to-date", "Warning: Permanently added", "Please make sure you have", "and the repository exists"];
+    if SCAFFOLD.iter().any(|p| raw.starts_with(p)) {
+        return None;
+    }
+    let line = strip_prefixes(raw);
+    // No letter or digit left means the line was decoration or a bare prefix.
+    line.chars().any(|c| c.is_alphanumeric()).then_some(line)
+}
+
+/// The one line of git's output worth showing a human: the first line that carries
+/// a real explanation. git prefixes its own noise (`fatal:`, `error:`, `remote:`,
+/// `hint:`) and pads with blanks and progress; we skip the lines that only
+/// scaffold and strip the prefixes off the one we keep, then cap the length so a
+/// pathological remote message can't wrap the dashboard.
+///
+/// A `CONFLICT` line wins when there is one: it names the file that needs merging,
+/// which is the next thing the reader will want, where git's accompanying
+/// `could not apply <sha>… <subject>` names only the commit.
+pub fn detail(out: &str) -> String {
+    let lines = || out.lines().filter_map(explaining);
+    let line = lines().find(|l| l.starts_with("CONFLICT")).or_else(|| lines().next()).unwrap_or("git failed without an explanation");
+    let line = line.trim_end_matches('.').trim();
+    if line.chars().count() > 120 {
+        let cut: String = line.chars().take(117).collect();
+        return format!("{cut}…");
+    }
+    line.to_string()
+}
+
+/// Build the [`Fail`] for a finished command. Both streams are read: git splits a
+/// failure across them — the `fatal:`/`error:` lines go to stderr while a merge
+/// writes its `CONFLICT (content): …` to stdout — so classifying stderr alone would
+/// file a plain conflict under "unclassified". stderr leads, so its lines are
+/// preferred when picking the one to show.
+fn failed(out: &std::process::Output) -> Fail {
+    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
+    Fail { kind: classify(&text), detail: detail(&text) }
+}
+
+/// `git fetch`, returning why it failed (or `None` when it worked).
+///
+/// Capture stderr rather than inheriting it: a failed fetch — unreachable remote,
+/// missing ssh key — otherwise dumps git's `fatal:` wall into the middle of the
+/// dashboard. The wall isn't lost; it's classified into a mark on the repo's row
+/// and one line under the table, which is grove's one-line-error style everywhere
+/// else. A repo whose fetch failed still gets a row: its remote state is simply the
+/// last one we managed to fetch.
+pub fn fetch(repo: &Path) -> Option<Fail> {
+    let out = Command::new("git").arg("-C").arg(repo).args(["fetch", "--quiet"]).output().ok()?;
+    (!out.status.success()).then(|| failed(&out))
 }
 
 /// `git pull` (honoring the user's `pull.rebase`/`pull.ff` config — grove doesn't
 /// impose a strategy, so a fleet pull behaves exactly like `git pull` in each repo).
 /// If it fails part-way — a rebase or merge that hit a conflict — abort the
 /// in-progress operation so a bulk pull never strands a repo half-applied; the repo
-/// is left as it was and reported unpulled. Returns whether the pull succeeded.
-pub fn pull(repo: &Path) -> Result<bool> {
-    // Capture (and drop) output rather than inheriting it: a conflicting rebase
+/// is left as it was and reported with the reason it didn't move.
+pub fn pull(repo: &Path) -> Result<Option<Fail>> {
+    // Capture stderr rather than inheriting it (see `fetch`): a conflicting rebase
     // otherwise dumps git's "CONFLICT …" wall into the middle of the fleet result.
-    // The dashboard reprints each repo's state afterwards, so quiet keeps it clean.
-    let ok = Command::new("git").arg("-C").arg(repo).args(["pull", "--quiet"]).output()?.status.success();
-    if !ok {
-        // No-ops when nothing is in progress; one of them cleans up on a conflict.
-        for op in [["rebase", "--abort"], ["merge", "--abort"]] {
-            let _ = Command::new("git").arg("-C").arg(repo).args(op).output();
-        }
+    let out = Command::new("git").arg("-C").arg(repo).args(["pull", "--quiet"]).output()?;
+    if out.status.success() {
+        return Ok(None);
     }
-    Ok(ok)
+    // No-ops when nothing is in progress; one of them cleans up on a conflict.
+    for op in [["rebase", "--abort"], ["merge", "--abort"]] {
+        let _ = Command::new("git").arg("-C").arg(repo).args(op).output();
+    }
+    Ok(Some(failed(&out)))
 }
 
-pub fn push(repo: &Path) -> Result<bool> {
-    // Capture output (see `pull`): a rejected push shouldn't leak `! [rejected]`
-    // noise into the fleet result — the reprinted dashboard shows what moved.
-    Ok(Command::new("git").arg("-C").arg(repo).args(["push", "--quiet"]).output()?.status.success())
+/// `git push`, returning why it failed (or `None` when it worked).
+pub fn push(repo: &Path) -> Result<Option<Fail>> {
+    let out = Command::new("git").arg("-C").arg(repo).args(["push", "--quiet"]).output()?;
+    Ok((!out.status.success()).then(|| failed(&out)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{https_to_ssh, remote_to_web};
+    use super::{classify, detail, https_to_ssh, remote_to_web, Trouble};
+
+    /// Verbatim stderr from the real transports, one per classified kind. These are
+    /// the messages the mark on the dashboard is derived from, so they're worth
+    /// pinning: a git release that rewords one shows up here, not as a silently
+    /// unclassified repo.
+    #[test]
+    fn classifies_denied_access() {
+        for msg in [
+            "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+            "remote: ERROR: Permission to owner/repo.git denied to someone.",
+            "fatal: Authentication failed for 'https://github.com/owner/repo.git/'",
+            "remote: Repository not found.\nfatal: repository 'https://github.com/owner/private.git/' not found",
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+            "Host key verification failed.\nfatal: Could not read from remote repository.",
+            // GitLab's banner: a private repo you can't see is reported as missing.
+            "remote: \nremote: =====\nremote: ERROR: The project you were looking for could not be found or you don't have permission to view it.\nfatal: Could not read from remote repository.",
+        ] {
+            assert_eq!(classify(msg), Trouble::Denied, "{msg}");
+        }
+    }
+
+    #[test]
+    fn classifies_an_unreachable_remote() {
+        for msg in [
+            "ssh: Could not resolve hostname github.com: Name or service not known",
+            "ssh: connect to host github.com port 22: Connection timed out",
+            "ssh: connect to host 127.0.0.1 port 1: Connection refused",
+            "fatal: unable to access 'https://example.com/repo.git/': Failed to connect to example.com port 443",
+        ] {
+            assert_eq!(classify(msg), Trouble::Unreachable, "{msg}");
+        }
+    }
+
+    #[test]
+    fn classifies_what_needs_a_human() {
+        for msg in [
+            "CONFLICT (content): Merge conflict in src/main.rs\nAutomatic merge failed; fix conflicts and then commit the result.",
+            "error: Your local changes to the following files would be overwritten by merge:\n\tsrc/main.rs",
+            "error: cannot pull with rebase: You have unstaged changes.",
+            " ! [rejected]        main -> main (non-fast-forward)",
+            "remote: error: GH006: Protected branch update failed for refs/heads/main.",
+            "fatal: Unable to create '/repo/.git/index.lock': File exists.",
+        ] {
+            assert_eq!(classify(msg), Trouble::NeedsHand, "{msg}");
+        }
+    }
+
+    #[test]
+    fn unrecognized_stderr_falls_through_to_failed() {
+        assert_eq!(classify("fatal: the remote end hung up unexpectedly"), Trouble::Failed);
+        assert_eq!(classify(""), Trouble::Failed);
+    }
+
+    #[test]
+    fn detail_keeps_the_explaining_line_and_drops_gits_scaffolding() {
+        // `hint:` lines and the `To <remote>` header explain nothing on their own.
+        let stderr = "To github.com:owner/repo.git\n ! [rejected]        main -> main (fetch first)\nhint: Updates were rejected because…";
+        assert_eq!(detail(stderr), "! [rejected]        main -> main (fetch first)");
+        // Prefix and trailing period stripped, so the line reads inside our own sentence.
+        assert_eq!(detail("fatal: Authentication failed for 'https://x/y.git/'"), "Authentication failed for 'https://x/y.git/'");
+        assert_eq!(detail("remote: Permission to owner/repo.git denied to someone."), "Permission to owner/repo.git denied to someone");
+        assert_eq!(detail("   \n\n"), "git failed without an explanation");
+    }
+
+    #[test]
+    fn detail_walks_past_a_forge_banner_to_the_line_that_explains() {
+        // GitLab pads its message with bare `remote:` spacers and `====` rules, and
+        // git appends two lines of access-rights boilerplate. The explanation is the
+        // one line in the middle, behind two stacked prefixes.
+        let stderr = "remote: \n\
+                      remote: ========================================================================\n\
+                      remote: \n\
+                      remote: ERROR: The project you were looking for could not be found or you don't have permission to view it.\n\
+                      remote: \n\
+                      fatal: Could not read from remote repository.\n\
+                      \n\
+                      Please make sure you have the correct access rights\n\
+                      and the repository exists.";
+        assert_eq!(detail(stderr), "The project you were looking for could not be found or you don't have permission to view it");
+    }
+
+    #[test]
+    fn detail_prefers_the_conflict_line_that_names_the_file() {
+        // git reports the conflict on stdout and "could not apply" on stderr; the
+        // file name is what the reader needs, so it wins wherever it appears.
+        let out = "error: could not apply 44e3910... mine\nCONFLICT (content): Merge conflict in file.txt";
+        assert_eq!(detail(out), "CONFLICT (content): Merge conflict in file.txt");
+    }
+
+    #[test]
+    fn detail_caps_a_pathological_line() {
+        let long = format!("fatal: {}", "x".repeat(500));
+        let out = detail(&long);
+        assert_eq!(out.chars().count(), 118, "capped to 117 chars plus the ellipsis");
+        assert!(out.ends_with('…'));
+    }
 
     #[test]
     fn rewrites_the_common_github_form() {

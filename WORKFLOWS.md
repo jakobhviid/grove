@@ -238,6 +238,40 @@ to push …`) and `→` hints naming the exact command that clears each kind of
 pending work — in the short aliases you actually have (e.g. `lgpp`), or the long
 `grove …` forms plus a `grove setup` nudge when you haven't provisioned them yet.
 
+### When a repo can't be reached
+
+A repo git couldn't talk to is marked ahead of its name, so a fleet action never
+leaves you guessing why something didn't move:
+
+```
+     Repository  Branch  Status
+     ──────────  ──────  ──────
+     dotsync     main    ✓
+  ⊘  temper      main    ✓          the counts are the last ones grove fetched, so they're dimmed
+  ⚠  clash       main    ↑1 ↓1
+  ↯  offline     main    ✓
+
+  legend: ⊘ no access to origin · ⚠ needs a hand · ↯ remote unreachable
+
+  4 repos · 2 clean · 1 diverged · ⊘ 1 denied · ⚠ 1 need a hand · ↯ 1 unreachable
+  ⊘ temper — no access to origin (Permission denied (publickey))
+  ⚠ clash — needs a hand (CONFLICT (content): Merge conflict in src/main.rs)
+  ↯ offline — can't reach the remote (Connection timed out)
+```
+
+- `⊘` **no access to origin** — key, repo permission, or an unverified host key.
+- `⚠` **needs a hand** — a conflict, local changes in the way, a rejected push, a
+  leftover `index.lock`.
+- `↯` **remote unreachable** — DNS, timeout, refused connection: usually the
+  network, not the repo.
+- `✗` **git failed** — anything else; the `→` line carries git's own words.
+
+The marks appear only when something is wrong, and each `→` line quotes git, so the
+reason is in front of you rather than in a log you have to go find. `lgs`/`lgp`/`lgpp`
+also list what they couldn't move right next to what they moved. For scripts,
+`--json` carries the same facts per repo (`trouble`, `trouble_detail`, `stale`) plus
+a `failed[]` array on the action verbs.
+
 ## Settings (`grove configure`)
 
 Three optional knobs live in `~/.config/grove/config` (same `key = value` shape

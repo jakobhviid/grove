@@ -155,6 +155,87 @@ fn default_dir_fallback_applies_inside_a_repo_too() {
         .stderr(predicate::str::contains(dest.path().to_string_lossy().into_owned()));
 }
 
+/// A repo whose fetch is refused, built without touching the network: a stand-in
+/// `ssh` that answers the way a real host does when your key isn't allowed. Returns
+/// the folder holding the fleet.
+#[cfg(unix)]
+fn fleet_with_a_denied_repo(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let ssh = dir.join("refusing-ssh");
+    fs::write(&ssh, "#!/bin/sh\necho 'git@example.invalid: Permission denied (publickey).' >&2\nexit 255\n").unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let repo = dir.join("locked");
+    fs::create_dir(&repo).unwrap();
+    let git = |args: &[&str]| {
+        Command::new("git").current_dir(&repo).args(args).assert().success();
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.invalid"]);
+    git(&["config", "user.name", "t"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&["remote", "add", "origin", "git@example.invalid:owner/locked.git"]);
+    git(&["config", "core.sshCommand", ssh.to_str().unwrap()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refused_fetch_is_marked_denied_in_the_table_the_legend_and_the_json() {
+    // A refused fetch reaches the reader four ways: the row carries a ⊘, the legend
+    // spells it out, the roll-up counts it, and one line quotes git verbatim.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    fleet_with_a_denied_repo(fleet.path());
+
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["overview"])
+        .arg(fleet.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("⊘ locked"))
+        .stdout(predicate::str::contains("legend: ⊘ no access to origin"))
+        .stdout(predicate::str::contains("⊘ 1 denied"))
+        .stdout(predicate::str::contains("Permission denied (publickey)"));
+
+    // Same knowledge on the machine surface, so an agent or script can act on it.
+    let out = grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["overview", "--json"])
+        .arg(fleet.path())
+        .assert()
+        .success();
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(json["repos"][0]["trouble"], "denied");
+    assert_eq!(json["summary"]["denied"], 1);
+    assert_eq!(json["repos"][0]["stale"], true);
+    assert!(json["repos"][0]["trouble_detail"].as_str().unwrap().contains("Permission denied"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_denied_repo_keeps_its_mark_through_the_action_verbs() {
+    // pull-all/push-all re-read state without fetching, so the trouble the fetch
+    // found has to be carried onto the dashboard they print — a repo that was locked
+    // during the fetch must not look healthy one line later.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    fleet_with_a_denied_repo(fleet.path());
+
+    for verb in ["pull-all", "push-all", "sync"] {
+        grove(home.path())
+            .env("XDG_CACHE_HOME", cache.path())
+            .args([verb])
+            .arg(fleet.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("⊘ locked"))
+            .stdout(predicate::str::contains("⊘ 1 denied"));
+    }
+}
+
 #[test]
 fn overview_force_and_default_cache_both_run() {
     // The per-repo cache is on by default; `--force` bypasses it. Both paths must

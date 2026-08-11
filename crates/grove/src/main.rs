@@ -231,6 +231,8 @@ fn fetch_collect(dir: Option<&Path>, force: bool, s: &settings::Settings) -> any
 /// Update the per-repo cache from a freshly-collected report: a repo we fetched
 /// (not `cached`, not https) is stamped settled when calm, else its stamp is
 /// dropped so it keeps re-fetching. Repos served from cache are left untouched.
+/// A repo whose fetch failed is never calm, so it re-fetches next run and its mark
+/// can't be buried under a cache hit — the cache only ever elides *quiet* repos.
 fn mark_cache(report: &grove_core::overview::Report) {
     for r in &report.repos {
         if r.https || r.cached {
@@ -283,9 +285,10 @@ fn cmd_sync(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()>
     let s = settings::load();
     let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), force, &s)?;
-    let synced = grove_core::sync::act_sync(&report);
-    let overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
-    let out = grove_core::sync::SyncReport { synced, overview };
+    let (synced, failed) = grove_core::sync::act_sync(&report);
+    let mut overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    grove_core::sync::settle(&mut overview, &report, &failed);
+    let out = grove_core::sync::SyncReport { synced, failed, overview };
     if json {
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -300,9 +303,10 @@ fn cmd_pull_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result
     let s = settings::load();
     let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), force, &s)?;
-    let pulled = grove_core::sync::act_pull_all(&report);
-    let overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
-    let out = grove_core::sync::PullReport { pulled, overview };
+    let (pulled, failed) = grove_core::sync::act_pull_all(&report);
+    let mut overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    grove_core::sync::settle(&mut overview, &report, &failed);
+    let out = grove_core::sync::PullReport { pulled, failed, overview };
     if json {
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
@@ -317,9 +321,10 @@ fn cmd_push_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result
     let s = settings::load();
     let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), force, &s)?;
-    let pushed = grove_core::sync::act_push_all(&report);
-    let overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
-    let out = grove_core::sync::PushReport { pushed, overview };
+    let (pushed, failed) = grove_core::sync::act_push_all(&report);
+    let mut overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    grove_core::sync::settle(&mut overview, &report, &failed);
+    let out = grove_core::sync::PushReport { pushed, failed, overview };
     if json {
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
