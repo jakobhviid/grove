@@ -261,8 +261,9 @@ grove configure cache_ttl 10            # seconds a settled repo stays cached (d
   (a repo re-fetches within `cache_ttl` of its last real fetch, never chaining
   skips) and pairs with the wide fetch pool: skip most repos, fetch the rest fast.
   Pass `--force` (`-f`) on any multi-repo verb to re-fetch everything.
-- **`default_dir`** — when you run `lg`/`lgs`/`lgp`/`lgpp` in a folder that has
-  nothing to do with git (not inside a repo, no repo subfolders), grove runs in
-  this folder instead and prints a dim note saying so. An explicit `dir` argument
+- **`default_dir`** — when you run `lg`/`lgs`/`lgp`/`lgpp` somewhere with no repo
+  subfolders to list — a folder unrelated to git, or a repo you're working inside —
+  grove runs in this folder instead and prints a dim note saying so. So `lg` from
+  deep inside a project still shows your fleet. An explicit `dir` argument
   always wins; unset, nothing changes. `grove setup` offers a menu of your repo
   folders to pick from, or set it directly with `grove configure default_dir <path>`.

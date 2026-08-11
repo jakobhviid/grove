@@ -22,7 +22,7 @@ use std::time::Duration;
 const KEYS: &[(&str, &str)] = &[
     ("cache", "skip re-fetching repos left settled by a recent fetch (on/off, default on)"),
     ("cache_ttl", "seconds a settled repo stays cached"),
-    ("default_dir", "folder to use when the current one has no git repos"),
+    ("default_dir", "folder the multi-repo verbs use when the current one has no repos to list"),
 ];
 
 const DEFAULT_TTL: u64 = 5;

@@ -244,20 +244,21 @@ fn mark_cache(report: &grove_core::overview::Report) {
     }
 }
 
-/// When no folder is given and the current directory has nothing to do with git
-/// (not inside a repo, and no immediate sub-repo to list), fall back to the
-/// configured `default_dir` — with a dim note so it's never a silent surprise. An
-/// explicit folder argument always wins, and with no `default_dir` set nothing
-/// changes (core defaults to `.`).
+/// When no folder is given and the current directory has no immediate sub-repo to
+/// list, fall back to the configured `default_dir` — with a dim note so it's never
+/// a silent surprise. The fleet verbs list a folder *of* repos, so working inside a
+/// repo is a fallback case too: the repo you're in is not a fleet. An explicit
+/// folder argument always wins, and with no `default_dir` set nothing changes (core
+/// defaults to `.`).
 fn resolve_dir(dir: Option<PathBuf>, settings: &settings::Settings) -> Option<PathBuf> {
     if dir.is_some() {
         return dir;
     }
     let default = settings.default_dir.as_ref()?;
-    if grove_core::git::inside_repo() || !grove_core::git::discover(Path::new(".")).is_empty() {
+    if !grove_core::git::discover(Path::new(".")).is_empty() {
         return None;
     }
-    grove_core::ui::note(&format!("no git repos here — showing {} (default_dir)", settings::tildify(default)));
+    grove_core::ui::note(&format!("no repos to list here — showing {} (default_dir)", settings::tildify(default)));
     Some(default.clone())
 }
 

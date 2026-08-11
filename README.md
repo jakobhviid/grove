@@ -87,8 +87,9 @@ that contain a `.git`. `--version`/`-V` and a man page are available; the data
 tools take **`--json`** (see below). Run bare `grove` for a one-screen overview
 of the whole suite. Set a **`default_dir`** — `grove setup` shows a menu of the
 repo folders under your home to pick from, or set it with `grove configure
-default_dir <path>` — and the multi-repo verbs fall back to it when the current
-folder has no repos of its own.
+default_dir <path>` — and the multi-repo verbs fall back to it whenever the
+current folder holds no repo subfolders to list, including when you are inside a
+repo working on it.
 
 ## Machine-readable output (`--json`)
 

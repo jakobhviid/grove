@@ -136,6 +136,26 @@ fn default_dir_fallback_runs_in_the_configured_folder_with_a_note() {
 }
 
 #[test]
+fn default_dir_fallback_applies_inside_a_repo_too() {
+    // Inside a repo there is no fleet to list, so `overview` with no argument shows
+    // the configured default_dir instead of an empty table.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let dest = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    Command::new("git").arg("init").current_dir(cwd.path()).assert().success();
+    grove(home.path()).args(["configure", "default_dir"]).arg(dest.path()).assert().success();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .current_dir(cwd.path())
+        .arg("overview")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("showing"))
+        .stderr(predicate::str::contains(dest.path().to_string_lossy().into_owned()));
+}
+
+#[test]
 fn overview_force_and_default_cache_both_run() {
     // The per-repo cache is on by default; `--force` bypasses it. Both paths must
     // produce a valid dashboard. (Cache stamping is unit-tested in cache.rs — it
