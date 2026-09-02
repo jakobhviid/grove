@@ -87,19 +87,58 @@ pub fn https_to_ssh(url: &str) -> Option<String> {
 /// The browser URL for a repo's `origin` (its GitHub/GitLab/Gitea/Forgejo page),
 /// or None if there's no origin or it can't be parsed. Whatever transport origin
 /// uses — scp-form, `ssh://`, `git://`, http(s) — maps to `https://host/path`.
+///
+/// The host a browser needs is not always the host git dials. Anyone juggling
+/// two accounts on one forge points their repos at a `~/.ssh/config` alias
+/// (`git@github-work:org/repo`) to pick the right key, and that alias resolves
+/// on their machine alone. It reaches a repo two ways — written into the remote,
+/// or swapped in by a `url.<alias>.insteadOf` rule — and both are unwound here
+/// so the link lands on the forge.
 pub fn web_url(repo: &Path) -> Option<String> {
-    remote_to_web(&git_out(repo, &["remote", "get-url", "origin"])?)
+    // `git remote get-url` applies insteadOf rewriting; the raw config value is
+    // the URL as written, before any local alias took its place.
+    let url = git_out(repo, &["config", "--get", "remote.origin.url"])
+        .filter(|u| !u.is_empty())
+        .or_else(|| git_out(repo, &["remote", "get-url", "origin"]))?;
+    let (host, path) = split_host_path(&url)?;
+    web_page(&browser_host(&host), &path)
 }
 
 /// Pure counterpart of [`web_url`]: map any git remote URL to its https web page.
 pub fn remote_to_web(url: &str) -> Option<String> {
     let (host, path) = split_host_path(url)?;
+    web_page(&host, &path)
+}
+
+fn web_page(host: &str, path: &str) -> Option<String> {
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     if host.is_empty() || path.is_empty() {
         return None;
     }
     Some(format!("https://{host}/{path}"))
+}
+
+/// The hostname a browser can reach for `host`, asking ssh to expand any
+/// `~/.ssh/config` alias behind it. A dotless name is the only shape an alias
+/// takes — no forge answers at a single label — so an ordinary remote never pays
+/// for the lookup, and a name ssh doesn't recognize comes back unchanged.
+fn browser_host(host: &str) -> String {
+    if host.contains('.') {
+        return host.to_string();
+    }
+    let Ok(out) = Command::new("ssh").args(["-G", host]).output() else {
+        return host.to_string();
+    };
+    if !out.status.success() {
+        return host.to_string();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix("hostname "))
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map_or_else(|| host.to_string(), str::to_string)
 }
 
 /// Split a remote URL into (host, path), dropping any userinfo and `:port`.
@@ -399,7 +438,7 @@ pub fn push(repo: &Path) -> Result<Option<Fail>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify, detail, https_to_ssh, remote_to_web, Trouble};
+    use super::{browser_host, classify, detail, https_to_ssh, remote_to_web, Trouble};
 
     /// Verbatim stderr from the real transports, one per classified kind. These are
     /// the messages the mark on the dashboard is derived from, so they're worth
@@ -589,5 +628,16 @@ mod tests {
     fn web_url_none_for_local_paths() {
         assert_eq!(remote_to_web("../bare/repo.git"), None);
         assert_eq!(remote_to_web("/srv/git/repo.git"), None);
+    }
+
+    #[test]
+    fn a_real_forge_host_is_left_alone() {
+        assert_eq!(browser_host("github.com"), "github.com");
+        assert_eq!(browser_host("git.company.com"), "git.company.com");
+    }
+
+    #[test]
+    fn an_unknown_single_label_host_is_left_alone() {
+        assert_eq!(browser_host("grove-no-such-ssh-alias"), "grove-no-such-ssh-alias");
     }
 }

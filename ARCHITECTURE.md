@@ -141,7 +141,12 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
 - **`git`** — the only module that shells out to `git`. Going through the real
   git binary (not a library) means the user's config, credentials, and SSH agent
   all apply. `discover` finds the immediate sub-repos; `is_https`/`web_url`/
-  `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo. The three
+  `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo. Two of
+  them read origin for different questions: `is_https` wants the URL git dials,
+  so it takes `git remote get-url` with `insteadOf` rewriting applied; `web_url`
+  wants a page a browser can open, so it takes the URL as written and expands any
+  single-label `~/.ssh/config` alias through `ssh -G` — a repo aimed at a
+  per-account alias fetches over that alias and links to the forge behind it. The three
   remote operations return an `Option<Fail>` rather than a bool: `classify` sorts
   git's stderr **and stdout** (a merge reports `CONFLICT` on stdout) into a
   `Trouble` — `Denied`, `Unreachable`, `NeedsHand`, `Failed` — and `detail` picks the
