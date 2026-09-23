@@ -133,9 +133,13 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   re-fetches at most `cache_ttl` after its last real fetch. `--force` bypasses it.
   This is a count-cutting complement to the wide fetch pool (skip most repos *and*
   fetch the rest fast), not a freshness trade — the repos you act on are never stale.
-- **default-dir fallback** — when a multi-repo verb gets no folder and the current
-  directory is unrelated to git (not inside a repo, no sub-repo within `depth`),
-  `main.rs` substitutes `default_dir` and prints a dim note to stderr.
+- **default-dir fallback** — when a multi-repo verb gets no folder, `main.rs`
+  substitutes `default_dir` and prints a dim note to stderr in two cases: the
+  current directory has no sub-repo within `depth` (unrelated to git, or inside a
+  repo), or it sits **strictly above** `default_dir`. The second is what keeps a
+  scan started from `$HOME` on the folder you named rather than sweeping every
+  sibling of it — and being strict is what lets `default_dir ~` mean "`$HOME` *is*
+  my repo home", since nothing is above itself.
 - **scan depth** — `depth` (default **2**) is how many levels down the fleet verbs
   look for repos, so a repo home organized into `work/`- and `private/`-style
   subfolders needs no configuring. `--depth N` overrides it for one run; the

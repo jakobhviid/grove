@@ -261,22 +261,42 @@ fn mark_cache(report: &grove_core::overview::Report) {
     }
 }
 
-/// When no folder is given and the current directory has no immediate sub-repo to
-/// list, fall back to the configured `default_dir` — with a dim note so it's never
-/// a silent surprise. The fleet verbs list a folder *of* repos, so working inside a
-/// repo is a fallback case too: the repo you're in is not a fleet. An explicit
-/// folder argument always wins, and with no `default_dir` set nothing changes (core
+/// Which folder a fleet verb given no argument should run in: the current one, or
+/// the configured `default_dir`. Two cases hand it to `default_dir`, each with a
+/// dim note so it is never a silent surprise — the current directory holds no repos
+/// to list (somewhere unrelated to git, or inside a repo, which is not a fleet), or
+/// it sits *above* the folder you named as your repo home. An explicit folder
+/// argument always wins, and with no `default_dir` set nothing changes (core
 /// defaults to `.`).
 fn resolve_dir(dir: Option<PathBuf>, depth: usize, settings: &settings::Settings) -> Option<PathBuf> {
     if dir.is_some() {
         return dir;
     }
     let default = settings.default_dir.as_ref()?;
-    if !grove_core::git::discover(Path::new("."), depth).is_empty() {
+    let shown = settings::tildify(default);
+    let why = if above_fleet(default) {
+        format!("your repos live in {shown} — showing it (default_dir)")
+    } else if grove_core::git::discover(Path::new("."), depth).is_empty() {
+        format!("no repos to list here — showing {shown} (default_dir)")
+    } else {
         return None;
-    }
-    grove_core::ui::note(&format!("no repos to list here — showing {} (default_dir)", settings::tildify(default)));
+    };
+    grove_core::ui::note(&why);
     Some(default.clone())
+}
+
+/// Whether the current directory sits above the folder you named as your repo
+/// home — your `$HOME` when the fleet is `~/Developer`. Scanning from up there
+/// reaches your repos, but sweeps sideways into everything else you keep at that
+/// level, so the folder you named is the one you meant.
+///
+/// It is *strictly* above: your repo home is not above itself, so pointing
+/// `default_dir` at `~` makes `~` the root and it gets scanned like any other.
+fn above_fleet(fleet: &Path) -> bool {
+    let (Ok(here), Ok(fleet)) = (std::fs::canonicalize("."), std::fs::canonicalize(fleet)) else {
+        return false;
+    };
+    fleet.starts_with(&here) && fleet != here
 }
 
 /// `grove ssh`: rewrite the HTTPS remotes under a folder to SSH. It walks the same
