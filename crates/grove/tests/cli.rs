@@ -612,3 +612,54 @@ fn naming_a_folder_as_the_repo_home_lets_it_be_scanned() {
         .stdout(predicate::str::contains("work/api"))
         .stdout(predicate::str::contains("4 repos"));
 }
+
+#[test]
+fn a_folder_holding_repos_only_deeper_down_defers_to_the_repo_home() {
+    // Choosing where to run is a shallow question: repos buried below this folder
+    // don't make it the fleet you meant to be standing in, so the folder you named
+    // wins. Pass it explicitly (or set it as default_dir) to scan it.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let elsewhere = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+
+    nested_fleet(remote.path(), elsewhere.path());
+    // The current folder holds no repo of its own — only one a level further down.
+    fs::create_dir(cwd.path().join("clientA")).unwrap();
+    Command::new("git").args(["clone", "-q"]).arg(remote.path().join("origin.git")).arg(cwd.path().join("clientA/site")).assert().success();
+
+    grove(home.path()).args(["configure", "default_dir"]).arg(elsewhere.path()).assert().success();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .current_dir(cwd.path())
+        .arg("overview")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no repos to list here"))
+        .stdout(predicate::str::contains("work/api"))
+        .stdout(predicate::str::contains("clientA/site").not());
+}
+
+#[test]
+fn a_repo_home_is_kept_and_scanned_to_the_full_depth() {
+    // The shallow probe only picks the folder. Standing in a repo home that holds
+    // repos directly *and* in subfolders lists both — it is not a depth-1 scan.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let elsewhere = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    nested_fleet(remote.path(), fleet.path());
+
+    grove(home.path()).args(["configure", "default_dir"]).arg(elsewhere.path()).assert().success();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .current_dir(fleet.path())
+        .arg("overview")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("default_dir").not())
+        .stdout(predicate::str::contains("work/api"))
+        .stdout(predicate::str::contains("4 repos"));
+}

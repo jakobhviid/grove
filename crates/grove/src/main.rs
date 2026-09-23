@@ -262,13 +262,19 @@ fn mark_cache(report: &grove_core::overview::Report) {
 }
 
 /// Which folder a fleet verb given no argument should run in: the current one, or
-/// the configured `default_dir`. Two cases hand it to `default_dir`, each with a
-/// dim note so it is never a silent surprise — the current directory holds no repos
-/// to list (somewhere unrelated to git, or inside a repo, which is not a fleet), or
-/// it sits *above* the folder you named as your repo home. An explicit folder
-/// argument always wins, and with no `default_dir` set nothing changes (core
-/// defaults to `.`).
-fn resolve_dir(dir: Option<PathBuf>, depth: usize, settings: &settings::Settings) -> Option<PathBuf> {
+/// the configured `default_dir`. Staying takes a folder that **holds repos
+/// directly** — that is what makes somewhere a fleet root you meant to be at, and
+/// asking any deeper would let a stray repo buried a few levels down claim a folder
+/// as a fleet. Two cases hand it to `default_dir` instead, each with a dim note so
+/// it is never a silent surprise: no repo sits directly here (somewhere unrelated
+/// to git, or inside a repo, which is not a fleet), or here is *above* the folder
+/// you named as your repo home. An explicit folder argument always wins, and with
+/// no `default_dir` set nothing changes (core defaults to `.`).
+///
+/// Only the *choice* of folder is shallow. Once chosen, the scan runs at the
+/// configured `depth`, so standing in a repo home whose repos are sorted into
+/// subfolders lists all of them.
+fn resolve_dir(dir: Option<PathBuf>, settings: &settings::Settings) -> Option<PathBuf> {
     if dir.is_some() {
         return dir;
     }
@@ -276,7 +282,7 @@ fn resolve_dir(dir: Option<PathBuf>, depth: usize, settings: &settings::Settings
     let shown = settings::tildify(default);
     let why = if above_fleet(default) {
         format!("your repos live in {shown} — showing it (default_dir)")
-    } else if grove_core::git::discover(Path::new("."), depth).is_empty() {
+    } else if grove_core::git::discover(Path::new("."), 1).is_empty() {
         format!("no repos to list here — showing {shown} (default_dir)")
     } else {
         return None;
@@ -305,7 +311,7 @@ fn above_fleet(fleet: &Path) -> bool {
 fn cmd_ssh(dir: Option<PathBuf>, yes: bool, depth: Option<usize>) -> anyhow::Result<()> {
     let s = settings::load();
     let depth = s.scan_depth(depth);
-    let dir = resolve_dir(dir, depth, &s);
+    let dir = resolve_dir(dir, &s);
     grove_core::remote::run(dir.as_deref(), depth, yes, &hints())
 }
 
@@ -314,7 +320,7 @@ fn cmd_ssh(dir: Option<PathBuf>, yes: bool, depth: Option<usize>) -> anyhow::Res
 fn cmd_overview(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usize>) -> anyhow::Result<()> {
     let s = settings::load();
     let depth = s.scan_depth(depth);
-    let dir = resolve_dir(dir, depth, &s);
+    let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -330,7 +336,7 @@ fn cmd_sync(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usize>)
     use grove_core::overview::Fetch;
     let s = settings::load();
     let depth = s.scan_depth(depth);
-    let dir = resolve_dir(dir, depth, &s);
+    let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     let (synced, failed) = grove_core::sync::act_sync(&report);
     let mut overview = grove_core::overview::collect(dir.as_deref(), depth, Fetch::None)?;
@@ -349,7 +355,7 @@ fn cmd_pull_all(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usi
     use grove_core::overview::Fetch;
     let s = settings::load();
     let depth = s.scan_depth(depth);
-    let dir = resolve_dir(dir, depth, &s);
+    let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     let (pulled, failed) = grove_core::sync::act_pull_all(&report);
     let mut overview = grove_core::overview::collect(dir.as_deref(), depth, Fetch::None)?;
@@ -368,7 +374,7 @@ fn cmd_push_all(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usi
     use grove_core::overview::Fetch;
     let s = settings::load();
     let depth = s.scan_depth(depth);
-    let dir = resolve_dir(dir, depth, &s);
+    let dir = resolve_dir(dir, &s);
     let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     let (pushed, failed) = grove_core::sync::act_push_all(&report);
     let mut overview = grove_core::overview::collect(dir.as_deref(), depth, Fetch::None)?;

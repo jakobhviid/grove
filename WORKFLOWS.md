@@ -346,15 +346,18 @@ grove configure depth 1                 # scan the folder flat (default 2)
   skips) and pairs with the wide fetch pool: skip most repos, fetch the rest fast.
   Pass `--force` (`-f`) on any multi-repo verb to re-fetch everything.
 - **`default_dir`** — the folder your repos live in. Run `lg`/`lgs`/`lgp`/`lgpp`
-  somewhere with no repos to list — a folder unrelated to git, or a repo you're
-  working inside — and grove runs here instead, with a dim note saying so. So `lg`
+  somewhere that holds no repos of its own — a folder unrelated to git, a repo
+  you're working inside, or one whose repos sit further down than its own
+  subdirectories — and grove runs here instead, with a dim note saying so. So `lg`
   from deep inside a project still shows your fleet. It also wins **above** itself:
   from `$HOME`, `lg` shows `~/Developer` rather than sweeping `Documents`,
   `Downloads` and everything else you keep alongside it. Point `default_dir` at a
   folder and that folder is the root — `grove configure default_dir ~` genuinely
   scans `$HOME`, since nothing is above itself. An explicit `dir` argument always
   wins; unset, nothing changes. `grove setup` offers a menu of your repo folders to
-  pick from, or set it directly with `grove configure default_dir <path>`.
+  pick from, or set it directly with `grove configure default_dir <path>`. Only the
+  *choice* of folder is shallow — once picked, the folder is scanned to the full
+  `depth`, subfolders and all.
 - **`depth`** — how many levels down the multi-repo verbs look for repos, default
   **2**: the folder itself plus one level of organizing subfolders. Set it to `1`
   for a flat scan, or higher for a deeper layout; `--depth N` answers for a single
