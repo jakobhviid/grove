@@ -1,7 +1,9 @@
-//! `overview` (the `lg` alias): a one-screen dashboard of every repo directly
-//! under a folder — branch, ahead/behind vs upstream, and staged/modified/
-//! untracked counts. Repos are fetched in parallel first; https remotes are
-//! flagged (not fetched) so you can switch them to SSH.
+//! `overview` (the `lg` alias): a one-screen dashboard of every repo under a
+//! folder — branch, ahead/behind vs upstream, and staged/modified/untracked
+//! counts. Repos organized into subfolders are ordered by the folder that holds
+//! them and wear it as a prefix, so a group's repos read as one block. Repos are
+//! fetched in parallel first; https remotes are flagged (not fetched) so you can
+//! switch them to SSH.
 //!
 //! Split in two so the CLI can render either surface without the logic knowing
 //! which: [`collect`] gathers the state into a serializable [`Report`] (this is
@@ -70,7 +72,8 @@ fn cause(kind: git::Trouble) -> &'static str {
 }
 
 /// Severity order for the `→` lines: what you can fix first, environment last.
-/// (The table itself stays in name order — this only ranks the detail lines.)
+/// (The table itself stays in group-then-name order — this only ranks the detail
+/// lines.)
 fn rank(kind: git::Trouble) -> u8 {
     match kind {
         git::Trouble::Denied => 0,
@@ -107,6 +110,11 @@ fn forge_icon(web_url: &str) -> &'static str {
 #[derive(Serialize)]
 pub struct RepoStatus {
     pub name: String,
+    /// The organizing folder this repo sits in, relative to the scanned folder
+    /// (`work`), or `null` for a repo sitting directly in it. The table orders on
+    /// it and prefixes the repo name with it; `--json` consumers get the two
+    /// parts separately, and `path` is the unambiguous key either way.
+    pub group: Option<String>,
     /// Absolute path to the repo — the target of the clickable-name `file://`
     /// link, and handy for `--json` consumers that want to act on the repo.
     pub path: String,
@@ -139,6 +147,13 @@ pub struct RepoStatus {
 }
 
 impl RepoStatus {
+    /// How this repo is named to a human: `work/api` when it sits in a group,
+    /// the bare name otherwise. Two groups can each hold an `api`, so this — not
+    /// `name` — is what every human-facing line prints.
+    pub fn label(&self) -> String {
+        git::label(self.group.as_deref(), &self.name)
+    }
+
     pub fn dirty(&self) -> bool {
         self.staged > 0 || self.modified > 0 || self.untracked > 0
     }
@@ -249,16 +264,17 @@ fn run_wide<R: Send>(n: usize, work: impl FnOnce() -> R + Send) -> R {
     }
 }
 
-/// Discover the repos directly under `dir` and read each one's state. `fetch`
-/// decides which ssh repos get a fresh `git fetch` first (all, none, or per-repo
-/// via the cache). Pure data: prints nothing but the shared "Fetching" progress
-/// bar (stderr). Render with [`render_human`], or serialize the [`Report`] as JSON.
-pub fn collect(dir: Option<&Path>, fetch: Fetch) -> Result<Report> {
+/// Discover the repos under `dir` — `depth` levels down, see [`git::discover`] —
+/// and read each one's state. `fetch` decides which ssh repos get a fresh
+/// `git fetch` first (all, none, or per-repo via the cache). Pure data: prints
+/// nothing but the shared "Fetching" progress bar (stderr). Render with
+/// [`render_human`], or serialize the [`Report`] as JSON.
+pub fn collect(dir: Option<&Path>, depth: usize, fetch: Fetch) -> Result<Report> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
-    let repos = git::discover(dir);
+    let repos = git::discover(dir, depth);
 
     // Classify remotes once, then decide per repo whether to fetch (https repos
     // are flagged, never fetched).
@@ -301,6 +317,7 @@ pub fn collect(dir: Option<&Path>, fetch: Fetch) -> Result<Report> {
             if https[i] {
                 return RepoStatus {
                     name: r.name.clone(),
+                    group: r.group.clone(),
                     path,
                     branch,
                     https: true,
@@ -321,6 +338,7 @@ pub fn collect(dir: Option<&Path>, fetch: Fetch) -> Result<Report> {
             let fail = fetch_failed.get(&r.path);
             RepoStatus {
                 name: r.name.clone(),
+                group: r.group.clone(),
                 path,
                 branch,
                 https: false,
@@ -435,12 +453,13 @@ pub fn render_human(report: &Report, hints: &Hints) {
 
     // Size the Repository and Branch columns to their widest entry (never below
     // the header) so a long name like `opencode-dynamic-custom-providers` can't
-    // shove the rest of the row out of alignment. Count chars, not bytes, so a
-    // Danish æ/ø/å in a name lines up the same as an ASCII one.
+    // shove the rest of the row out of alignment. The Repository column sizes to
+    // the qualified label (`work/api`), which is what the row prints. Count chars,
+    // not bytes, so a Danish æ/ø/å in a name lines up the same as an ASCII one.
     let width = |header: &str, field: &dyn Fn(&RepoStatus) -> usize| {
         rows.iter().map(field).max().unwrap_or(0).max(header.chars().count())
     };
-    let name_w = width("Repository", &|r| r.name.chars().count());
+    let name_w = width("Repository", &|r| r.label().chars().count());
     let branch_w = width("Branch", &|r| r.branch.chars().count());
 
     // Two spaces between every column — a single space read as cramped once the
@@ -498,10 +517,19 @@ pub fn render_human(report: &Report, hints: &Hints) {
         // name is also a file:// link that opens the repo folder (the counterpart
         // to the forge glyph, which opens its web page) — on terminals that render
         // OSC 8; elsewhere it's plain text.
+        // A grouped repo wears its folder as a dim `work/` prefix: the group is
+        // context you read once per run of rows, the repo is the subject. Rows are
+        // ordered by group, so the prefix also marks where one group ends and the
+        // next begins. Pad from the plain label's width — the ANSI codes are
+        // zero-width on screen but not in the string.
         let name = {
-            let padded = format!("{:<name_w$}", r.name);
-            let painted = if r.calm() { padded } else { ui::paint("1", &padded) };
-            if links && !r.path.is_empty() { ui::open(&r.path, &painted) } else { painted }
+            let pad = " ".repeat(name_w.saturating_sub(r.label().chars().count()));
+            let leaf = if r.calm() { r.name.clone() } else { ui::paint("1", &r.name) };
+            let cell = match &r.group {
+                Some(group) => format!("{}{leaf}{pad}", ui::paint("90", &format!("{group}/"))),
+                None => format!("{leaf}{pad}"),
+            };
+            if links && !r.path.is_empty() { ui::open(&r.path, &cell) } else { cell }
         };
         let flag = row_flag(r);
         let link = row_link(r);
@@ -565,7 +593,7 @@ fn render_legend(report: &Report) {
 /// command to clear each kind of pending work. This is the at-a-glance triage.
 fn render_summary(report: &Report, hints: &Hints) {
     let summary = &report.summary;
-    let https_names: Vec<&str> = report.repos.iter().filter(|r| r.https).map(|r| r.name.as_str()).collect();
+    let https_names: Vec<String> = report.repos.iter().filter(|r| r.https).map(RepoStatus::label).collect();
 
     let sep = ui::paint("90", " · ");
     let mut parts = vec![ui::paint("1", &format!("{} repos", summary.repos))];
@@ -618,7 +646,7 @@ fn render_summary(report: &Report, hints: &Hints) {
             "" => detail.to_string(),
             cause => format!("{cause} ({detail})"),
         };
-        println!("  {} {} {}", ui::paint(color, glyph), ui::paint("1", &repo.name), ui::paint("90", &format!("— {said}")));
+        println!("  {} {} {}", ui::paint(color, glyph), ui::paint("1", &repo.label()), ui::paint("90", &format!("— {said}")));
     }
     if troubled.len() > MAX_TROUBLE_LINES {
         let rest = troubled.len() - MAX_TROUBLE_LINES;

@@ -36,7 +36,7 @@ local -a cmds=(
   'setup:provision your shell (grove file + rc line)'
   'init:print shell aliases from your grove file (for eval)'
   'example:print a starter grove file'
-  'configure:get or set grove settings (cache, cache_ttl, default_dir)'
+  'configure:get or set grove settings (cache, cache_ttl, default_dir, depth)'
 )
 _arguments -C \
   '--llm[print the full LLM-readable guide and exit]' \
@@ -60,12 +60,15 @@ case "$state" in
       ssh)
         _arguments \
           '(-y --yes)'{-y,--yes}'[apply without the confirmation prompt]' \
+          '--depth[levels down to look for repos]:levels:' \
           '1:folder of repos:_files -/' ;;
       overview|sync|pull-all|push-all)
         _arguments \
           '--json[emit JSON instead of the human view]' \
+          '(-f --force)'{-f,--force}'[re-fetch every repo, bypassing the cache]' \
+          '--depth[levels down to look for repos]:levels:' \
           '1:folder of repos:_files -/' ;;
-      configure) _values 'setting' cache cache_ttl default_dir ;;
+      configure) _values 'setting' cache cache_ttl default_dir depth ;;
       tree)
         _arguments \
           '(-a --all)'{-a,--all}'[show hidden entries (dotfiles)]' \

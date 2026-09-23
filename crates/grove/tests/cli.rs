@@ -424,3 +424,139 @@ fn setup_force_offers_no_default_dir_even_with_a_repo_folder_present() {
     let has_default = config.exists() && fs::read_to_string(&config).unwrap().contains("default_dir");
     assert!(!has_default, "--force setup set a default_dir");
 }
+
+/// A fleet whose repos live in organizing subfolders (`work/api`, `private/notes`)
+/// alongside one sitting loose in the folder itself. Each is a real clone of a
+/// local bare origin, so fetches succeed offline and every row reads clean.
+fn nested_fleet(remote: &std::path::Path, fleet: &std::path::Path) {
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        Command::new("git").current_dir(dir).args(args).assert().success();
+    };
+    let origin = remote.join("origin.git");
+    Command::new("git").args(["init", "-q", "--bare", "-b", "main"]).arg(&origin).assert().success();
+
+    // One commit in the origin, so every clone lands on a branch with an upstream.
+    let seed = remote.join("seed");
+    fs::create_dir(&seed).unwrap();
+    git(&seed, &["init", "-q", "-b", "main"]);
+    git(&seed, &["config", "user.email", "t@example.invalid"]);
+    git(&seed, &["config", "user.name", "t"]);
+    git(&seed, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&seed, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(&seed, &["push", "-q", "origin", "main"]);
+
+    for rel in ["loose", "work/api", "work/web", "private/notes"] {
+        let dest = fleet.join(rel);
+        fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        Command::new("git").args(["clone", "-q"]).arg(&origin).arg(&dest).assert().success();
+    }
+}
+
+#[test]
+fn nested_repos_reach_the_dashboard_ordered_by_their_folder() {
+    // Repos sorted into `work/` and `private/` are found by default, wear the folder
+    // that holds them, and are ordered by it — so a group reads as one block rather
+    // than interleaving with the rest by bare name.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    nested_fleet(remote.path(), fleet.path());
+
+    let out = grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .arg("overview")
+        .arg(fleet.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4 repos"));
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+
+    let at = |needle: &str| stdout.find(needle).unwrap_or_else(|| panic!("{needle} missing from:\n{stdout}"));
+    // Ungrouped first, then each organizing folder in turn.
+    assert!(at("loose") < at("private/notes"), "ungrouped repos lead:\n{stdout}");
+    assert!(at("private/notes") < at("work/api"), "groups follow in name order:\n{stdout}");
+    assert!(at("work/api") < at("work/web"), "within a group, by repo name:\n{stdout}");
+}
+
+#[test]
+fn the_json_document_splits_the_group_from_the_repo_name() {
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    nested_fleet(remote.path(), fleet.path());
+
+    let out = grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["overview", "--json"])
+        .arg(fleet.path())
+        .assert()
+        .success();
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let repos = json["repos"].as_array().unwrap();
+    assert_eq!(repos.len(), 4);
+    // Same order as the table, and the group is its own field — a consumer never
+    // has to split a name to learn which folder a repo sits in.
+    assert_eq!(repos[0]["name"], "loose");
+    assert_eq!(repos[0]["group"], serde_json::Value::Null);
+    assert_eq!(repos[1]["name"], "notes");
+    assert_eq!(repos[1]["group"], "private");
+    assert_eq!(repos[2]["name"], "api");
+    assert_eq!(repos[2]["group"], "work");
+}
+
+#[test]
+fn every_fleet_verb_covers_the_nested_repos() {
+    // sync/pull-all/push-all act off the same scan the dashboard uses, so a repo in
+    // a subfolder is theirs to move too — not just one they can list.
+    let home = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    nested_fleet(remote.path(), fleet.path());
+
+    for verb in ["sync", "pull-all", "push-all", "ssh"] {
+        let cache = tempdir().unwrap();
+        grove(home.path())
+            .env("XDG_CACHE_HOME", cache.path())
+            .arg(verb)
+            .arg(fleet.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("work/api"))
+            .stdout(predicate::str::contains("private/notes"))
+            .stdout(predicate::str::contains("4 repos"));
+    }
+}
+
+#[test]
+fn depth_one_scans_the_folder_flat() {
+    // The flat layout is one setting (or one flag) away: at depth 1 only the repo
+    // sitting directly in the folder is a fleet member.
+    let home = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    nested_fleet(remote.path(), fleet.path());
+
+    let flat = |cmd: &mut Command| {
+        let cache = tempdir().unwrap();
+        cmd.env("XDG_CACHE_HOME", cache.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("1 repos"))
+            .stdout(predicate::str::contains("work/api").not());
+    };
+    flat(grove(home.path()).args(["overview", "--depth", "1"]).arg(fleet.path()));
+
+    grove(home.path()).args(["configure", "depth", "1"]).assert().success();
+    flat(grove(home.path()).arg("overview").arg(fleet.path()));
+    // The flag still wins over the setting, in the other direction too.
+    let cache = tempdir().unwrap();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .args(["overview", "--depth", "2"])
+        .arg(fleet.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4 repos"));
+}

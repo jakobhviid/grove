@@ -15,9 +15,6 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
   multi-repo verbs. bash and fish only get the clap-generated fallback, which
   does neither. Either hand-write bash/fish equivalents or enrich the generated
   ones.
-- **Deeper repo discovery.** `overview`/`sync`/`pull-all`/`push-all` scan only the
-  *immediate* subdirectories of the folder. A `--depth N` (or recursive) mode
-  would pick up nested layouts (e.g. `~/src/org/repo`).
 - **`tree` polish.** Optional `.gitignore` awareness and file-type-aware icons,
   so it reads closer to `eza --tree` without taking on `eza`'s dependency weight.
 
@@ -30,6 +27,14 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **Repos in organizing subfolders.** The fleet verbs scanned only the *immediate*
+  subdirectories, so a repo home split into `work/` and `private/` read as empty.
+  They now scan two levels by default (`depth`, with `--depth N` per run), order the
+  table by the folder that holds each repo, and prefix the name with it (`work/api`)
+  — `group` and `name` are separate fields in `--json`, since a bare name isn't
+  unique across groups. A repo is a leaf the walk never descends into (submodules,
+  vendored clones, and the repo you're standing in), which is what keeps the extra
+  level cheap.
 - **`grove setup` activates the aliases where you ran it.** Setup provisioned the
   files and then left you in a shell that knew nothing about them. A process can't
   add aliases to its parent shell, so setup now takes whichever honest route

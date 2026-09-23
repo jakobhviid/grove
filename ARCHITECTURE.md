@@ -16,7 +16,7 @@ grove/
     grove/                       # the thin CLI (the `grove` binary)
       src/main.rs                # clap definition, --llm, and the per-verb handlers
       src/config.rs              # the grove file + `grove setup`/`init` (shell aliases)
-      src/settings.rs            # the settings file + `grove configure` (cache, default_dir)
+      src/settings.rs            # the settings file + `grove configure` (cache, default_dir, depth)
       src/cache.rs               # fetch-freshness stamps under ~/.cache/grove
       src/completions.rs         # shell completions + man, from the one clap definition
     grove-core/                  # all the multi-repo/git logic, as typed functions
@@ -63,7 +63,7 @@ reimplementing anything.
 The data-producing tools separate *gathering* state from *rendering* it, so the
 same core call backs both the human table and `--json`:
 
-- `overview::collect(dir, Fetch) -> Report`, `overview::render_human(&Report, &Hints)`
+- `overview::collect(dir, depth, Fetch) -> Report`, `overview::render_human(&Report, &Hints)`
 - `sync::act_sync(&Report) -> (Vec<Synced>, Vec<Failure>)`, `sync::render_human(&SyncReport, &Hints)`
 - `sync::act_pull_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_pull(&PullReport, &Hints)`
 - `sync::act_push_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_push(&PushReport, &Hints)`
@@ -122,7 +122,8 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   `GROVE_NO_RELOAD` override the prompt. Anything else falls back to printing the
   one line to run, so the caller's shell is never replaced silently.
 - **`settings.rs`** — the settings file (`~/.config/grove/config`, same
-  `key = value` shape) and `grove configure`: `cache`, `cache_ttl`, `default_dir`.
+  `key = value` shape) and `grove configure`: `cache`, `cache_ttl`, `default_dir`,
+  `depth`.
 - **`cache.rs`** — per-repo fetch cache, **on by default**. One zero-byte stamp
   per repo under `~/.cache/grove` (mtime = last real fetch that left it settled).
   `collect`'s cache closure skips a repo's fetch when it was settled within
@@ -133,15 +134,23 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   This is a count-cutting complement to the wide fetch pool (skip most repos *and*
   fetch the rest fast), not a freshness trade — the repos you act on are never stale.
 - **default-dir fallback** — when a multi-repo verb gets no folder and the current
-  directory is unrelated to git (not inside a repo, no immediate sub-repo),
+  directory is unrelated to git (not inside a repo, no sub-repo within `depth`),
   `main.rs` substitutes `default_dir` and prints a dim note to stderr.
+- **scan depth** — `depth` (default **2**) is how many levels down the fleet verbs
+  look for repos, so a repo home organized into `work/`- and `private/`-style
+  subfolders needs no configuring. `--depth N` overrides it for one run; the
+  binary resolves the two into the one number it passes to `discover`/`collect`.
 
 ## `grove-core` module responsibilities
 
 - **`git`** — the only module that shells out to `git`. Going through the real
   git binary (not a library) means the user's config, credentials, and SSH agent
-  all apply. `discover` finds the immediate sub-repos; `is_https`/`web_url`/
-  `ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on one repo. Two of
+  all apply. `discover` walks the sub-repos to a depth, treating a repo as a
+  **leaf** — never descending into one, and never into the folder it was pointed at
+  when that is itself a repo — so submodules, vendored clones and `node_modules`
+  stay out of the walk and a fleet verb run inside a project costs one `read_dir`.
+  `is_https`/`web_url`/`ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on
+  one repo. Two of
   them read origin for different questions: `is_https` wants the URL git dials,
   so it takes `git remote get-url` with `insteadOf` rewriting applied; `web_url`
   wants a page a browser can open, so it takes the URL as written and expands any
@@ -155,7 +164,10 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   `Failed` *with git's own words attached* — never to silence.
 - **`overview`** — the dashboard: discover, fetch (per the `Fetch` policy) on a
   wide pool, classify each repo into the roll-up buckets, render the aligned colour
-  table + hints. Each repo name is an OSC 8 `file://` link that opens the folder;
+  table + hints. A repo found inside an organizing subfolder carries that folder as
+  its `group`, which orders the table and prefixes the name (`work/api`) — a bare
+  name isn't unique once two groups each hold an `api`, so `group` + `name` is what
+  every surface identifies a repo by, `--json` included. Each repo name is an OSC 8 `file://` link that opens the folder;
   the forge glyph links to its web page. A repo carrying a `Trouble` gets a mark in
   a leading flag column (present only when a row needs it), a legend naming the
   marks used, a roll-up count, and a `→` line quoting git; its sync cell is dimmed

@@ -1,8 +1,9 @@
 //! `switch_ssh` (grove ssh): rewrite the HTTPS remotes of every repo under a
-//! folder to their SSH equivalents, so `lg`/`lgs`/`lgp`/`lgpp` can fetch and sync
-//! them (they flag HTTPS remotes and skip them). Previews every change and asks
-//! for confirmation before touching any config; the switch is trivially
-//! reversible with `git remote set-url`, but mutating remotes still earns a yes.
+//! folder — nested ones included, per `depth` — to their SSH equivalents, so
+//! `lg`/`lgs`/`lgp`/`lgpp` can fetch and sync them (they flag HTTPS remotes and
+//! skip them). Previews every change and asks for confirmation before touching
+//! any config; the switch is trivially reversible with `git remote set-url`, but
+//! mutating remotes still earns a yes.
 use crate::{git, overview, ui};
 use anyhow::Result;
 use rayon::prelude::*;
@@ -17,12 +18,12 @@ struct Change {
     to: String,
 }
 
-pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Result<()> {
+pub fn run(dir: Option<&Path>, depth: usize, assume_yes: bool, hints: &overview::Hints) -> Result<()> {
     let dir = dir.unwrap_or_else(|| Path::new("."));
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
-    let repos = git::discover(dir);
+    let repos = git::discover(dir, depth);
     if repos.is_empty() {
         println!("No git repositories in {}", dir.display());
         return Ok(());
@@ -36,7 +37,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Res
         .flat_map_iter(|r| {
             git::remotes(&r.path).into_iter().filter_map(move |(remote, url)| {
                 let to = git::https_to_ssh(&url)?;
-                Some(Change { repo: r.name.clone(), path: r.path.clone(), remote, from: url, to })
+                Some(Change { repo: r.label(), path: r.path.clone(), remote, from: url, to })
             })
         })
         .collect();
@@ -45,7 +46,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Res
     if changes.is_empty() {
         println!("{}", ui::paint("90", "No HTTPS remotes to switch."));
         // Still show the dashboard so a bare `grove ssh` doubles as `grove overview`.
-        let report = overview::collect(Some(dir), overview::Fetch::All)?;
+        let report = overview::collect(Some(dir), depth, overview::Fetch::All)?;
         overview::render_human(&report, hints);
         return Ok(());
     }
@@ -76,7 +77,7 @@ pub fn run(dir: Option<&Path>, assume_yes: bool, hints: &overview::Hints) -> Res
     // visibly flips from the red HTTPS flag to a real sync state — and any repo
     // whose SSH auth isn't set up surfaces right away.
     println!();
-    let report = overview::collect(Some(dir), overview::Fetch::All)?;
+    let report = overview::collect(Some(dir), depth, overview::Fetch::All)?;
     overview::render_human(&report, hints);
     Ok(())
 }

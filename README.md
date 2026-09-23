@@ -79,17 +79,63 @@ straight to git, so flags, color, pager, signals, and exit codes are git's own.
 | `grove push-all [dir]` | `lgpp` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
 | `grove tree [dir] [-a] [-l N]` | `lt` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon, folder names are clickable |
 | `grove ssh [dir] [-y]` | — | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `overview`/`sync`/`pull-all`/`push-all` can fetch them). Previews every change and asks first; `-y` skips the prompt |
-| `grove configure [key] [value]` | — | **Settings**: get/set `cache`, `cache_ttl`, `default_dir` in `~/.config/grove/config` (no args lists them all) |
+| `grove configure [key] [value]` | — | **Settings**: get/set `cache`, `cache_ttl`, `default_dir`, `depth` in `~/.config/grove/config` (no args lists them all) |
 
 The multi-repo commands (`overview`, `sync`, `pull-all`, `push-all`) operate on
-the **immediate subdirectories** of the folder (default: the current directory)
-that contain a `.git`. `--version`/`-V` and a man page are available; the data
-tools take **`--json`** (see below). Run bare `grove` for a one-screen overview
-of the whole suite. Set a **`default_dir`** — `grove setup` shows a menu of the
-repo folders under your home to pick from, or set it with `grove configure
-default_dir <path>` — and the multi-repo verbs fall back to it whenever the
-current folder holds no repo subfolders to list, including when you are inside a
-repo working on it.
+the repos under a folder (default: the current directory), **two levels deep** —
+so they cover both the repos sitting in it and the ones you have sorted into
+subfolders like `work/` and `private/`. `--version`/`-V` and a man page are
+available; the data tools take **`--json`** (see below). Run bare `grove` for a
+one-screen overview of the whole suite. Set a **`default_dir`** — `grove setup`
+shows a menu of the repo folders under your home to pick from, or set it with
+`grove configure default_dir <path>` — and the multi-repo verbs fall back to it
+whenever the current folder holds no repo subfolders to list, including when you
+are inside a repo working on it.
+
+### Repos in subfolders
+
+Keep your repo home tidy and grove follows you into it:
+
+```
+~/Developer/
+├── scratch/          # a repo sitting loose in the folder
+├── work/
+│   ├── api/
+│   └── web-frontend/
+└── private/
+    ├── dotfiles/
+    └── notes/
+```
+
+`lg` lists all five, ordered by the folder that holds them — so a group reads as
+one block, and each repo wears its folder:
+
+```
+  Repository         Branch  Status
+  ─────────────────  ──────  ──────
+  scratch            main    ✓
+  private/dotfiles   main    ✓
+  private/notes      main    ✓ ?1
+  work/api           main    ↑1
+  work/web-frontend  main    ✓
+
+  5 repos · 3 clean · 1 dirty · 1 to push
+```
+
+`lgs`, `lgp`, `lgpp` and `grove ssh` all act on the same set, so `work/api` gets
+pushed by `lgpp` like any other repo. Two groups can each hold an `api` — the
+folder is what tells them apart, in the table and in `--json` (where `group` and
+`name` are separate fields).
+
+Two rules keep the scan cheap and predictable: **a repo is a leaf** — grove never
+descends into one, so a submodule or a vendored clone belongs to its parent repo
+rather than joining the fleet — and **so is a repo you are standing in**, so
+running `lg` inside a project never walks its `node_modules`.
+
+One level of organizing folders is the default. `grove configure depth 1` gives
+you the flat scan (the immediate subdirectories only); a higher number goes
+further down, and `--depth N` answers for a single run without changing the
+setting.
 
 ## Machine-readable output (`--json`)
 
@@ -230,6 +276,10 @@ co  = grove commit          # your own shortcuts, too
   and they're marked `cached` in the roll-up. `--force` (`-f`) re-fetches
   everything; `grove configure cache off` disables it. On a settled fleet a repeat
   run fetches only the handful of active repos.
+- **Repos in subfolders are first-class.** The multi-repo verbs scan two levels
+  by default, so a repo home split into `work/` and `private/` works without
+  configuring anything. Rows are ordered by the folder that holds them and print it
+  as a prefix (`work/api`); `depth` and `--depth` set how far down to look.
 - **Tree (`grove tree`, alias `lt`)** has no external dependencies (no eza),
   lists directories before files, hides dotfiles unless `-a` is given, and makes
   folder names clickable (a `file://` link that opens the directory).

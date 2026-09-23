@@ -16,11 +16,23 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::path::Path;
 
-/// One repo `sync` touched, and which direction.
+/// One repo `sync` touched, and which direction. `name`/`group` split the same
+/// way as a dashboard row, so a nested repo is identified the same everywhere.
 #[derive(Serialize)]
 pub struct Synced {
     pub name: String,
+    pub group: Option<String>,
     pub op: &'static str, // "pull" | "push"
+}
+
+impl Synced {
+    fn new(repo: &overview::RepoStatus, op: &'static str) -> Self {
+        Synced { name: repo.name.clone(), group: repo.group.clone(), op }
+    }
+
+    fn label(&self) -> String {
+        git::label(self.group.as_deref(), &self.name)
+    }
 }
 
 /// One repo an action tried and failed to move: which way it was going, what kind
@@ -30,6 +42,8 @@ pub struct Synced {
 #[derive(Serialize)]
 pub struct Failure {
     pub name: String,
+    /// The organizing folder the repo sits in, as on its dashboard row.
+    pub group: Option<String>,
     /// Absolute path, so the trouble can be stamped onto the re-read dashboard.
     pub path: String,
     pub op: &'static str, // "pull" | "push"
@@ -39,7 +53,18 @@ pub struct Failure {
 
 impl Failure {
     fn new(repo: &overview::RepoStatus, op: &'static str, fail: git::Fail) -> Self {
-        Failure { name: repo.name.clone(), path: repo.path.clone(), op, kind: fail.kind, detail: fail.detail }
+        Failure {
+            name: repo.name.clone(),
+            group: repo.group.clone(),
+            path: repo.path.clone(),
+            op,
+            kind: fail.kind,
+            detail: fail.detail,
+        }
+    }
+
+    fn label(&self) -> String {
+        git::label(self.group.as_deref(), &self.name)
     }
 }
 
@@ -51,7 +76,9 @@ pub struct SyncReport {
     pub overview: overview::Report,
 }
 
-/// What `push_all` pushed, what it couldn't, plus the dashboard afterwards.
+/// What `push_all` pushed, what it couldn't, plus the dashboard afterwards. The
+/// pushed list names each repo the way the dashboard does (`work/api` when it sits
+/// in a group), since a bare name is not unique across groups.
 #[derive(Serialize)]
 pub struct PushReport {
     pub pushed: Vec<String>,
@@ -59,7 +86,9 @@ pub struct PushReport {
     pub overview: overview::Report,
 }
 
-/// What `pull_all` pulled, what it couldn't, plus the dashboard afterwards.
+/// What `pull_all` pulled, what it couldn't, plus the dashboard afterwards. The
+/// pulled list names each repo the way the dashboard does (`work/api` when it sits
+/// in a group), since a bare name is not unique across groups.
 #[derive(Serialize)]
 pub struct PullReport {
     pub pulled: Vec<String>,
@@ -114,7 +143,7 @@ pub fn act_sync(report: &overview::Report) -> (Vec<Synced>, Vec<Failure>) {
             };
             pb.inc(1);
             match outcome {
-                Ok(None) => Ok(Synced { name: r.name.clone(), op }),
+                Ok(None) => Ok(Synced::new(r, op)),
                 Ok(Some(fail)) => Err(Failure::new(r, op, fail)),
                 Err(e) => Err(Failure::new(r, op, spawn_failed(&e))),
             }
@@ -175,7 +204,7 @@ pub fn act_pull_all(report: &overview::Report) -> (Vec<String>, Vec<Failure>) {
             let outcome = git::pull(Path::new(&r.path));
             pb.inc(1);
             match outcome {
-                Ok(None) => Ok(r.name.clone()),
+                Ok(None) => Ok(r.label()),
                 Ok(Some(fail)) => Err(Failure::new(r, "pull", fail)),
                 Err(e) => Err(Failure::new(r, "pull", spawn_failed(&e))),
             }
@@ -200,7 +229,7 @@ pub fn act_push_all(report: &overview::Report) -> (Vec<String>, Vec<Failure>) {
             let outcome = git::push(Path::new(&r.path));
             pb.inc(1);
             match outcome {
-                Ok(None) => Ok(r.name.clone()),
+                Ok(None) => Ok(r.label()),
                 Ok(Some(fail)) => Err(Failure::new(r, "push", fail)),
                 Err(e) => Err(Failure::new(r, "push", spawn_failed(&e))),
             }
@@ -216,14 +245,14 @@ pub fn act_push_all(report: &overview::Report) -> (Vec<String>, Vec<Failure>) {
 fn render_failures(failed: &[Failure]) {
     for f in failed {
         let (glyph, color) = overview::mark_for(f.kind);
-        println!("  {} {} {}", ui::paint(color, glyph), f.name, ui::paint("90", &format!("— {} failed: {}", f.op, f.detail)));
+        println!("  {} {} {}", ui::paint(color, glyph), f.label(), ui::paint("90", &format!("— {} failed: {}", f.op, f.detail)));
     }
 }
 
 pub fn render_human(report: &SyncReport, hints: &overview::Hints) {
     for item in &report.synced {
         let arrow = if item.op == "pull" { "↓" } else { "↑" };
-        println!("  {} {}", ui::paint("32", arrow), item.name);
+        println!("  {} {}", ui::paint("32", arrow), item.label());
     }
     render_failures(&report.failed);
     overview::render_human(&report.overview, hints);

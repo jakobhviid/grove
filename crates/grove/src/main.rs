@@ -77,6 +77,9 @@ enum Cmd {
         /// Apply without the confirmation prompt (required for non-interactive use).
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+        /// How many levels down to look for repos (1 = the immediate subdirectories only).
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Multi-repo dashboard: branch, ahead/behind, dirty state, and a forge link per repo in a folder (alias: lg).
     Overview {
@@ -88,6 +91,9 @@ enum Cmd {
         /// Re-fetch every repo, bypassing the per-repo cache.
         #[arg(short, long)]
         force: bool,
+        /// How many levels down to look for repos (1 = the immediate subdirectories only).
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Fast-forward-pull the behind repos and push the ahead ones (clean, in-sync only), then show the overview (alias: lgs).
     Sync {
@@ -99,6 +105,9 @@ enum Cmd {
         /// Re-fetch every repo, bypassing the per-repo cache.
         #[arg(short, long)]
         force: bool,
+        /// How many levels down to look for repos (1 = the immediate subdirectories only).
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Fast-forward every repo in a folder that is behind its upstream (no push), then show the overview (alias: lgp).
     PullAll {
@@ -110,6 +119,9 @@ enum Cmd {
         /// Re-fetch every repo, bypassing the per-repo cache.
         #[arg(short, long)]
         force: bool,
+        /// How many levels down to look for repos (1 = the immediate subdirectories only).
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Push every repo in a folder that has unpushed commits (no pull), then show the overview (alias: lgpp).
     PushAll {
@@ -121,6 +133,9 @@ enum Cmd {
         /// Re-fetch every repo, bypassing the per-repo cache.
         #[arg(short, long)]
         force: bool,
+        /// How many levels down to look for repos (1 = the immediate subdirectories only).
+        #[arg(long)]
+        depth: Option<usize>,
     },
     /// Tree view (dirs first, Nerd-Font icons); git repos get a git icon (alias: lt).
     Tree {
@@ -182,11 +197,11 @@ fn main() {
         Some(Cmd::Commit { all, push, message }) => run(grove_core::passthrough::commit(all, push, &message)),
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
-        Some(Cmd::Ssh { dir, yes }) => run(grove_core::remote::run(dir.as_deref(), yes, &hints())),
-        Some(Cmd::Overview { dir, json, force }) => run(cmd_overview(dir, json, force)),
-        Some(Cmd::Sync { dir, json, force }) => run(cmd_sync(dir, json, force)),
-        Some(Cmd::PullAll { dir, json, force }) => run(cmd_pull_all(dir, json, force)),
-        Some(Cmd::PushAll { dir, json, force }) => run(cmd_push_all(dir, json, force)),
+        Some(Cmd::Ssh { dir, yes, depth }) => run(cmd_ssh(dir, yes, depth)),
+        Some(Cmd::Overview { dir, json, force, depth }) => run(cmd_overview(dir, json, force, depth)),
+        Some(Cmd::Sync { dir, json, force, depth }) => run(cmd_sync(dir, json, force, depth)),
+        Some(Cmd::PullAll { dir, json, force, depth }) => run(cmd_pull_all(dir, json, force, depth)),
+        Some(Cmd::PushAll { dir, json, force, depth }) => run(cmd_push_all(dir, json, force, depth)),
         Some(Cmd::Tree { dir, level, all, json }) => run(cmd_tree(dir, level, all, json)),
         Some(Cmd::Setup { shell, force, reload, no_reload }) => run(config::setup(shell, force, config::Reload::from_flags(reload, no_reload, force))),
         Some(Cmd::Init { shell }) => config::init(shell),
@@ -216,12 +231,12 @@ fn hints() -> grove_core::overview::Hints {
 /// skipped; everything with pending work still fetches. After collecting we record
 /// each *fetched* repo's settled state (skipped ones keep their earlier stamp, so
 /// staleness stays bounded to the TTL). `--force` / cache-off fetch everything.
-fn fetch_collect(dir: Option<&Path>, force: bool, s: &settings::Settings) -> anyhow::Result<grove_core::overview::Report> {
+fn fetch_collect(dir: Option<&Path>, depth: usize, force: bool, s: &settings::Settings) -> anyhow::Result<grove_core::overview::Report> {
     use grove_core::overview::Fetch;
     let ttl = s.ttl();
     let want = move |repo: &Path| !cache::settled_within(repo, ttl);
     let mode = if force || !s.cache { Fetch::All } else { Fetch::Cache(&want) };
-    let report = grove_core::overview::collect(dir, mode)?;
+    let report = grove_core::overview::collect(dir, depth, mode)?;
     if s.cache {
         mark_cache(&report);
     }
@@ -252,24 +267,35 @@ fn mark_cache(report: &grove_core::overview::Report) {
 /// repo is a fallback case too: the repo you're in is not a fleet. An explicit
 /// folder argument always wins, and with no `default_dir` set nothing changes (core
 /// defaults to `.`).
-fn resolve_dir(dir: Option<PathBuf>, settings: &settings::Settings) -> Option<PathBuf> {
+fn resolve_dir(dir: Option<PathBuf>, depth: usize, settings: &settings::Settings) -> Option<PathBuf> {
     if dir.is_some() {
         return dir;
     }
     let default = settings.default_dir.as_ref()?;
-    if !grove_core::git::discover(Path::new(".")).is_empty() {
+    if !grove_core::git::discover(Path::new("."), depth).is_empty() {
         return None;
     }
     grove_core::ui::note(&format!("no repos to list here — showing {} (default_dir)", settings::tildify(default)));
     Some(default.clone())
 }
 
+/// `grove ssh`: rewrite the HTTPS remotes under a folder to SSH. It walks the same
+/// repos the fleet verbs do — nested ones included — so a repo the dashboard flags
+/// as https is one this can switch.
+fn cmd_ssh(dir: Option<PathBuf>, yes: bool, depth: Option<usize>) -> anyhow::Result<()> {
+    let s = settings::load();
+    let depth = s.scan_depth(depth);
+    let dir = resolve_dir(dir, depth, &s);
+    grove_core::remote::run(dir.as_deref(), depth, yes, &hints())
+}
+
 /// The multi-repo dashboard (`grove overview`, alias `lg`): resolve the folder,
 /// collect every repo's state, then render the human table or the JSON document.
-fn cmd_overview(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+fn cmd_overview(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usize>) -> anyhow::Result<()> {
     let s = settings::load();
-    let dir = resolve_dir(dir, &s);
-    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let depth = s.scan_depth(depth);
+    let dir = resolve_dir(dir, depth, &s);
+    let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -280,13 +306,14 @@ fn cmd_overview(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result
 
 /// `grove sync` (alias `lgs`): pull/push the clean, in-sync repos, then re-read
 /// (no fetch) and render the post-action dashboard.
-fn cmd_sync(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+fn cmd_sync(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usize>) -> anyhow::Result<()> {
     use grove_core::overview::Fetch;
     let s = settings::load();
-    let dir = resolve_dir(dir, &s);
-    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let depth = s.scan_depth(depth);
+    let dir = resolve_dir(dir, depth, &s);
+    let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     let (synced, failed) = grove_core::sync::act_sync(&report);
-    let mut overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    let mut overview = grove_core::overview::collect(dir.as_deref(), depth, Fetch::None)?;
     grove_core::sync::settle(&mut overview, &report, &failed);
     let out = grove_core::sync::SyncReport { synced, failed, overview };
     if json {
@@ -298,13 +325,14 @@ fn cmd_sync(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()>
 }
 
 /// `grove pull-all` (alias `lgp`): fast-forward every behind repo, then render.
-fn cmd_pull_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+fn cmd_pull_all(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usize>) -> anyhow::Result<()> {
     use grove_core::overview::Fetch;
     let s = settings::load();
-    let dir = resolve_dir(dir, &s);
-    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let depth = s.scan_depth(depth);
+    let dir = resolve_dir(dir, depth, &s);
+    let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     let (pulled, failed) = grove_core::sync::act_pull_all(&report);
-    let mut overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    let mut overview = grove_core::overview::collect(dir.as_deref(), depth, Fetch::None)?;
     grove_core::sync::settle(&mut overview, &report, &failed);
     let out = grove_core::sync::PullReport { pulled, failed, overview };
     if json {
@@ -316,13 +344,14 @@ fn cmd_pull_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result
 }
 
 /// `grove push-all` (alias `lgpp`): push every ahead repo, then render.
-fn cmd_push_all(dir: Option<PathBuf>, json: bool, force: bool) -> anyhow::Result<()> {
+fn cmd_push_all(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usize>) -> anyhow::Result<()> {
     use grove_core::overview::Fetch;
     let s = settings::load();
-    let dir = resolve_dir(dir, &s);
-    let report = fetch_collect(dir.as_deref(), force, &s)?;
+    let depth = s.scan_depth(depth);
+    let dir = resolve_dir(dir, depth, &s);
+    let report = fetch_collect(dir.as_deref(), depth, force, &s)?;
     let (pushed, failed) = grove_core::sync::act_push_all(&report);
-    let mut overview = grove_core::overview::collect(dir.as_deref(), Fetch::None)?;
+    let mut overview = grove_core::overview::collect(dir.as_deref(), depth, Fetch::None)?;
     grove_core::sync::settle(&mut overview, &report, &failed);
     let out = grove_core::sync::PushReport { pushed, failed, overview };
     if json {

@@ -12,5 +12,8 @@ indicatif = "0.17"
 supports-hyperlinks = "3.2.0"
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

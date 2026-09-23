@@ -1,4 +1,4 @@
-//! Discover the git repos directly under a folder and read their state by
+//! Discover the git repos under a folder and read their state by
 //! shelling out to `git`. Going through the real git binary (rather than a
 //! library) means the user's config, credentials, and SSH agent all apply —
 //! exactly matching the shell functions grove replaces.
@@ -9,27 +9,81 @@ use std::process::Command;
 
 pub struct Repo {
     pub path: PathBuf,
+    /// The repo folder's own name (`api`), never the path to it.
     pub name: String,
+    /// The organizing folder the repo sits in, relative to the scan root
+    /// (`work`), or `None` for a repo sitting directly in it.
+    pub group: Option<String>,
 }
 
-/// Immediate subdirectories of `dir` that are git worktrees, sorted by name.
-pub fn discover(dir: &Path) -> Vec<Repo> {
+impl Repo {
+    /// How the repo is named to a human: `work/api` for a grouped repo, the bare
+    /// name for a top-level one. Unique within a scan, which the bare name is not
+    /// once two groups each hold an `api`.
+    pub fn label(&self) -> String {
+        label(self.group.as_deref(), &self.name)
+    }
+}
+
+/// The qualified name for a `group`/`name` pair — the one place the `/` join
+/// lives, so every surface spells a nested repo the same way.
+pub fn label(group: Option<&str>, name: &str) -> String {
+    match group {
+        Some(g) => format!("{g}/{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// The git worktrees under `dir`, at most `depth` levels down, sorted by group
+/// then name — so the organizing folder, not the repo name, drives the order and
+/// a group's repos arrive as one run.
+///
+/// `depth` 1 is the flat layout: the immediate subdirectories only. `depth` 2
+/// also looks inside each subdirectory that is not itself a repo, which is the
+/// `~/src/work/api` shape. Two rules keep the walk honest and cheap:
+///
+/// - **a repo is a leaf.** We never descend into one, so a submodule or a vendored
+///   clone is part of its parent repo, not a fleet member of its own.
+/// - **a repo root is a leaf too.** Running a fleet verb from inside a repo scans
+///   that one folder and stops — the repo you are working in is not a fleet, and
+///   a `node_modules` never gets walked.
+///
+/// A hidden folder is still listed when it is itself a repo, but is never
+/// descended into: nobody organizes their work under `.cache`.
+pub fn discover(dir: &Path, depth: usize) -> Vec<Repo> {
     let mut repos = Vec::new();
+    let depth = if is_repo(dir) { 1 } else { depth.max(1) };
+    walk(dir, None, depth, &mut repos);
+    repos.sort_by(|a, b| a.group.cmp(&b.group).then_with(|| a.name.cmp(&b.name)));
+    repos
+}
+
+/// Whether `dir` is a git worktree. `.git` is a directory in a normal clone and a
+/// file in a worktree or submodule, so existence — not file type — is the test.
+fn is_repo(dir: &Path) -> bool {
+    dir.join(".git").exists()
+}
+
+/// Collect the repos in `dir` into `out`, recursing into non-repo children while
+/// `budget` levels remain. `group` is the path from the scan root to `dir`.
+fn walk(dir: &Path, group: Option<&str>, budget: usize, out: &mut Vec<Repo>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return repos;
+        return;
     };
     for e in entries.flatten() {
-        let p = e.path();
-        if p.join(".git").exists() {
-            let name = p
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            repos.push(Repo { path: p, name });
+        let path = e.path();
+        let Some(name) = path.file_name().map(|s| s.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if !path.is_dir() {
+            continue;
+        }
+        if is_repo(&path) {
+            out.push(Repo { path, name, group: group.map(str::to_string) });
+        } else if budget > 1 && !name.starts_with('.') {
+            walk(&path, Some(&label(group, &name)), budget - 1, out);
         }
     }
-    repos.sort_by(|a, b| a.name.cmp(&b.name));
-    repos
 }
 
 fn git_out(repo: &Path, args: &[&str]) -> Option<String> {
@@ -438,7 +492,89 @@ pub fn push(repo: &Path) -> Result<Option<Fail>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{browser_host, classify, detail, https_to_ssh, remote_to_web, Trouble};
+    use super::{browser_host, classify, detail, discover, https_to_ssh, remote_to_web, Trouble};
+    use std::path::Path;
+
+    /// Make `root/<rel>/.git` — enough for [`discover`] to count `rel` as a repo,
+    /// without needing a real git tree.
+    fn seed_repo(root: &Path, rel: &str) {
+        std::fs::create_dir_all(root.join(rel).join(".git")).unwrap();
+    }
+
+    /// The labels [`discover`] returns, in the order it returns them.
+    fn labels(root: &Path, depth: usize) -> Vec<String> {
+        discover(root, depth).iter().map(|r| r.label()).collect()
+    }
+
+    #[test]
+    fn depth_one_sees_only_the_immediate_subdirectories() {
+        let root = tempfile::tempdir().unwrap();
+        seed_repo(root.path(), "loose");
+        seed_repo(root.path(), "work/api");
+        assert_eq!(labels(root.path(), 1), vec!["loose"]);
+    }
+
+    #[test]
+    fn depth_two_finds_repos_inside_their_organizing_folder() {
+        let root = tempfile::tempdir().unwrap();
+        seed_repo(root.path(), "work/api");
+        seed_repo(root.path(), "private/notes");
+        assert_eq!(labels(root.path(), 2), vec!["private/notes", "work/api"]);
+    }
+
+    /// The organizing folder drives the order, so a group's repos arrive as one
+    /// block instead of interleaving with the rest by name.
+    #[test]
+    fn repos_are_ordered_by_group_then_name() {
+        let root = tempfile::tempdir().unwrap();
+        seed_repo(root.path(), "work/zebra");
+        seed_repo(root.path(), "work/apple");
+        seed_repo(root.path(), "private/mango");
+        seed_repo(root.path(), "scratch"); // ungrouped
+        // Ungrouped repos lead (they sit in the folder itself), then each group in
+        // turn — never `apple, mango, scratch, zebra` by bare name.
+        assert_eq!(labels(root.path(), 2), vec!["scratch", "private/mango", "work/apple", "work/zebra"]);
+    }
+
+    /// Two groups may each hold an `api`; the group is what tells them apart.
+    #[test]
+    fn same_repo_name_in_two_groups_stays_distinct() {
+        let root = tempfile::tempdir().unwrap();
+        seed_repo(root.path(), "work/api");
+        seed_repo(root.path(), "private/api");
+        let repos = discover(root.path(), 2);
+        assert_eq!(labels(root.path(), 2), vec!["private/api", "work/api"]);
+        assert!(repos.iter().all(|r| r.name == "api"), "the bare name stays the leaf");
+    }
+
+    /// A repo is a leaf: a submodule or vendored clone belongs to its parent repo,
+    /// not to the fleet.
+    #[test]
+    fn a_repo_is_never_descended_into() {
+        let root = tempfile::tempdir().unwrap();
+        seed_repo(root.path(), "api");
+        seed_repo(root.path(), "api/vendor/forked-dep");
+        assert_eq!(labels(root.path(), 3), vec!["api"]);
+    }
+
+    /// Running a fleet verb from inside a repo scans that folder and stops — so a
+    /// `node_modules` full of packages is never walked.
+    #[test]
+    fn a_repo_root_is_a_leaf_too() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        seed_repo(root.path(), "node_modules/dep/nested");
+        assert!(labels(root.path(), 3).is_empty());
+    }
+
+    /// A hidden folder that is a repo still shows; one that isn't is never walked.
+    #[test]
+    fn hidden_folders_are_listed_as_repos_but_never_descended_into() {
+        let root = tempfile::tempdir().unwrap();
+        seed_repo(root.path(), ".dotfiles");
+        seed_repo(root.path(), ".cache/some-clone");
+        assert_eq!(labels(root.path(), 2), vec![".dotfiles"]);
+    }
 
     /// Verbatim stderr from the real transports, one per classified kind. These are
     /// the messages the mark on the dashboard is derived from, so they're worth

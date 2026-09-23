@@ -32,10 +32,15 @@ grove sync    [dir] [-f]   # pull the behind + push the ahead clean repos, then 
 grove pull-all [dir] [-f]  # pull every behind repo (ff + rebase/merge diverged per your git config), then overview (alias: lgp)
 grove push-all [dir] [-f]  # push every repo with unpushed commits, then overview (alias: lgpp)
                            #   -f / --force: re-fetch every repo, bypassing the per-repo cache
+                           #   --depth N:    levels to look down for repos (default 2)
 grove tree    [dir] [-a] [-l N]   # tree view; git repos get a git icon (alias: lt)
 grove ssh     [dir] [-y]  # switch a folder's HTTPS remotes to SSH (previews & asks; -y skips)
-grove configure [key] [value]     # get/set settings: cache, cache_ttl, default_dir
+grove configure [key] [value]     # get/set settings: cache, cache_ttl, default_dir, depth
 ```
+
+The multi-repo verbs cover the repos **two levels down** by default: the ones
+sitting in the folder and the ones you have sorted into subfolders like `work/`
+and `private/` (see *Repos in subfolders* below).
 
 The multi-repo verbs are a symmetric trio: **`sync` (`lgs`)** does both directions
 for the clean, in-sync repos and is the everyday one; **`pull-all` (`lgp`)** and
@@ -54,10 +59,10 @@ convenience and are not expanded in scripts.
 document to stdout, progress to stderr, so the pipe stays clean:
 
 ```sh
-grove overview ~/src --json     # {dir, repos:[{name,path,branch,https,web_url,ahead,behind,staged,modified,untracked}], summary:{...}}
-grove sync ~/src --json         # {synced:[{name,op}], overview:{...}}   ← act + re-check in one call
-grove pull-all ~/src --json     # {pulled:[name], overview:{...}}
-grove push-all ~/src --json     # {pushed:[name], overview:{...}}
+grove overview ~/src --json     # {dir, repos:[{name,group,path,branch,https,web_url,ahead,behind,staged,modified,untracked}], summary:{...}}
+grove sync ~/src --json         # {synced:[{name,group,op}], overview:{...}}   ← act + re-check in one call
+grove pull-all ~/src --json     # {pulled:[label], overview:{...}}
+grove push-all ~/src --json     # {pushed:[label], overview:{...}}
 grove tree ~/src -l 1 --json    # {root, entries:[{name,type,is_repo,children:[...]}]}
 ```
 
@@ -238,6 +243,50 @@ to push …`) and `→` hints naming the exact command that clears each kind of
 pending work — in the short aliases you actually have (e.g. `lgpp`), or the long
 `grove …` forms plus a `grove setup` nudge when you haven't provisioned them yet.
 
+### Repos in subfolders
+
+A repo home split into organizing folders works without configuring anything —
+the multi-repo verbs scan two levels by default:
+
+```
+~/Developer/
+├── scratch/          # a repo sitting loose in the folder
+├── work/
+│   ├── api/
+│   └── web-frontend/
+└── private/
+    ├── dotfiles/
+    └── notes/
+```
+
+```
+$ lg ~/Developer
+
+  Repository         Branch  Status
+  ─────────────────  ──────  ──────
+  scratch            main    ✓
+  private/dotfiles   main    ✓
+  private/notes      main    ✓ ?1
+  work/api           main    ↑1
+  work/web-frontend  main    ✓
+
+  5 repos · 3 clean · 1 dirty · 1 to push
+  → `lgpp` pushes 1 with unpushed commits
+```
+
+The organizing folder — not the repo name — orders the table, so a group reads as
+one block, and each repo wears the folder it sits in. `lgs`, `lgp`, `lgpp` and
+`grove ssh` all act on the same set: `work/api` is `lgpp`'s to push like any other
+repo. Two groups can each hold an `api`; the folder is what tells them apart, in
+the table and in `--json`, which carries `group` and `name` as separate fields.
+
+A repo is a **leaf** — grove never descends into one, so a submodule or a vendored
+clone stays part of its parent repo — and so is a repo you are standing in, so `lg`
+inside a project never walks its `node_modules`.
+
+Set `grove configure depth 1` for a flat scan, a higher number for a deeper
+layout, or pass `--depth N` for one run.
+
 ### When a repo can't be reached
 
 A repo git couldn't talk to is marked ahead of its name, so a fleet action never
@@ -274,7 +323,7 @@ a `failed[]` array on the action verbs.
 
 ## Settings (`grove configure`)
 
-Three optional knobs live in `~/.config/grove/config` (same `key = value` shape
+Four optional knobs live in `~/.config/grove/config` (same `key = value` shape
 as the grove file). `grove configure` lists them; `grove configure <key> <value>`
 sets one:
 
@@ -284,6 +333,7 @@ grove configure default_dir ~/Developer # where the multi-repo verbs run when th
                                         #   current folder has no repos of its own
 grove configure cache off               # disable the per-repo fetch cache (default on)
 grove configure cache_ttl 10            # seconds a settled repo stays cached (default 5)
+grove configure depth 1                 # scan the folder flat (default 2)
 ```
 
 - **`cache`** / **`cache_ttl`** — the **per-repo fetch cache** (on by default).
@@ -301,3 +351,7 @@ grove configure cache_ttl 10            # seconds a settled repo stays cached (d
   deep inside a project still shows your fleet. An explicit `dir` argument
   always wins; unset, nothing changes. `grove setup` offers a menu of your repo
   folders to pick from, or set it directly with `grove configure default_dir <path>`.
+- **`depth`** — how many levels down the multi-repo verbs look for repos, default
+  **2**: the folder itself plus one level of organizing subfolders. Set it to `1`
+  for a flat scan, or higher for a deeper layout; `--depth N` answers for a single
+  run without changing the setting.

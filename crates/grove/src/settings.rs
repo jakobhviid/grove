@@ -9,6 +9,9 @@
 //! - `cache_ttl`   — how many seconds a settled repo stays cached (default **5**)
 //! - `default_dir` — folder the multi-repo verbs fall back to when the current
 //!   directory is unrelated to git (default **unset** — no fallback)
+//! - `depth`       — how many levels down the multi-repo verbs look for repos
+//!   (default **2**, so repos sorted into `work/` and `private/` subfolders are
+//!   found; `1` restricts them to the immediate subdirectories)
 //!
 //! [`load`] is the typed view the binary runs on; [`configure`] backs
 //! `grove configure` (list / get / set).
@@ -23,9 +26,16 @@ const KEYS: &[(&str, &str)] = &[
     ("cache", "skip re-fetching repos left settled by a recent fetch (on/off, default on)"),
     ("cache_ttl", "seconds a settled repo stays cached"),
     ("default_dir", "folder the multi-repo verbs use when the current one has no repos to list"),
+    ("depth", "levels down to look for repos — 2 finds them in organizing subfolders, 1 is flat"),
 ];
 
 const DEFAULT_TTL: u64 = 5;
+
+/// How deep the fleet verbs look for repos by default. 2 covers the layout people
+/// actually keep — a repo home with `work/` and `private/` subfolders inside it —
+/// while a repo is still a leaf the walk never descends into, so the extra level
+/// costs one `read_dir` per organizing folder and nothing else.
+const DEFAULT_DEPTH: usize = 2;
 
 /// Folder names people commonly give the directory that holds their repos — used
 /// to prefer a deliberately-named dev folder over an incidental one when `grove
@@ -49,6 +59,8 @@ pub struct Settings {
     pub cache_ttl: u64,
     /// Already `~`-expanded to an absolute path, ready to use.
     pub default_dir: Option<PathBuf>,
+    /// Levels the fleet verbs descend looking for repos; at least 1.
+    pub depth: usize,
 }
 
 impl Default for Settings {
@@ -57,7 +69,7 @@ impl Default for Settings {
         // settled (the quiet ones with nothing to act on) and always re-fetches
         // anything with pending work, so actionable state stays live; cached rows
         // are marked, and `--force` bypasses it.
-        Settings { cache: true, cache_ttl: DEFAULT_TTL, default_dir: None }
+        Settings { cache: true, cache_ttl: DEFAULT_TTL, default_dir: None, depth: DEFAULT_DEPTH }
     }
 }
 
@@ -65,6 +77,13 @@ impl Settings {
     /// The TTL as a `Duration` for the cache check.
     pub fn ttl(&self) -> Duration {
         Duration::from_secs(self.cache_ttl)
+    }
+
+    /// How deep this run should look for repos: the `--depth` the caller passed,
+    /// else the configured `depth`. A flag is a one-off answer to "how is *this*
+    /// folder laid out", so it wins over the setting without touching it.
+    pub fn scan_depth(&self, flag: Option<usize>) -> usize {
+        flag.unwrap_or(self.depth).max(1)
     }
 }
 
@@ -137,6 +156,9 @@ pub fn load() -> Settings {
         s.cache_ttl = v.parse().unwrap_or(s.cache_ttl);
     }
     s.default_dir = lookup(&pairs, "default_dir").filter(|v| !v.is_empty()).map(|v| expand_tilde(&v));
+    if let Some(v) = lookup(&pairs, "depth") {
+        s.depth = v.parse().map(|n: usize| n.max(1)).unwrap_or(s.depth);
+    }
     s
 }
 
@@ -169,6 +191,7 @@ fn effective(pairs: &[(String, String)], key: &str) -> String {
         "cache" => "on".into(),
         "cache_ttl" => DEFAULT_TTL.to_string(),
         "default_dir" => "unset".into(),
+        "depth" => DEFAULT_DEPTH.to_string(),
         _ => String::new(),
     }
 }
@@ -219,6 +242,13 @@ fn set(key: &str, value: &str) -> Result<()> {
                 let n: u64 = value.trim().parse().map_err(|_| anyhow::anyhow!("`cache_ttl` must be a whole number of seconds (got `{value}`)"))?;
                 n.to_string()
             }
+            "depth" => {
+                let n: usize = value.trim().parse().map_err(|_| anyhow::anyhow!("`depth` must be a whole number of levels (got `{value}`)"))?;
+                if n < 1 {
+                    anyhow::bail!("`depth` must be at least 1 (got `{value}`)");
+                }
+                n.to_string()
+            }
             _ => value.trim().to_string(), // default_dir: store the path as typed (~ kept for readability)
         })
     };
@@ -263,18 +293,19 @@ pub(crate) fn default_dir_configured() -> bool {
 /// [`candidates_in`]; this just supplies `$HOME`.
 pub(crate) fn detect_candidates() -> Vec<(PathBuf, usize)> {
     match config::env_path("HOME") {
-        Some(home) => candidates_in(&home),
+        Some(home) => candidates_in(&home, load().depth),
         None => Vec::new(),
     }
 }
 
 /// The testable core of [`detect_candidates`]: scan `home`'s immediate,
-/// non-hidden subdirectories, count the git repos directly inside each, and keep
-/// the plausible dev-root folders — a conventionally-named one with any repos, or
+/// non-hidden subdirectories, count the git repos inside each at the configured
+/// `depth` — so a repo home whose repos all sit in `work/`-style subfolders is
+/// counted, not passed over as empty — and keep the plausible dev-root folders — a conventionally-named one with any repos, or
 /// any folder holding at least [`COLLECTION_MIN`]. Ranked conventionally-named
 /// first, then by repo count, capped at [`MAX_SUGGESTIONS`]. Each entry is
 /// `(path, repo count)`.
-fn candidates_in(home: &Path) -> Vec<(PathBuf, usize)> {
+fn candidates_in(home: &Path, depth: usize) -> Vec<(PathBuf, usize)> {
     let Ok(entries) = std::fs::read_dir(home) else {
         return Vec::new();
     };
@@ -287,7 +318,7 @@ fn candidates_in(home: &Path) -> Vec<(PathBuf, usize)> {
         if name.starts_with('.') || !path.is_dir() {
             continue;
         }
-        let repos = grove_core::git::discover(&path).len();
+        let repos = grove_core::git::discover(&path, depth).len();
         let conventional = DEV_DIR_NAMES.contains(&name.to_ascii_lowercase().as_str());
         if (conventional && repos >= 1) || repos >= COLLECTION_MIN {
             found.push((path, repos, conventional));
@@ -373,7 +404,7 @@ mod tests {
         seed_repos(home.path(), "Developer", &["a", "b"]); // conventional, 2
         seed_repos(home.path(), "src", &["x"]); // conventional, 1
         seed_repos(home.path(), "stuff", &["p", "q", "r", "s"]); // unconventional, 4
-        let c = candidates_in(home.path());
+        let c = candidates_in(home.path(), DEFAULT_DEPTH);
         // Both conventional folders rank ahead of the richer incidental one, and
         // among the conventional ones the higher repo count wins.
         assert_eq!(names(&c), vec!["Developer", "src", "stuff"]);
@@ -384,22 +415,37 @@ mod tests {
     fn candidates_exclude_a_lone_repo_in_an_unconventional_folder() {
         let home = tempfile::tempdir().unwrap();
         seed_repos(home.path(), "misc", &["only"]); // 1 repo, not a conventional name
-        assert!(candidates_in(home.path()).is_empty());
+        assert!(candidates_in(home.path(), DEFAULT_DEPTH).is_empty());
     }
 
     #[test]
     fn candidates_include_a_two_repo_unconventional_collection() {
         let home = tempfile::tempdir().unwrap();
         seed_repos(home.path(), "misc", &["a", "b"]); // >= COLLECTION_MIN
-        let c = candidates_in(home.path());
+        let c = candidates_in(home.path(), DEFAULT_DEPTH);
         assert_eq!(names(&c), vec!["misc"]);
+    }
+
+    /// A repo home organized into subfolders (`~/Developer/work/api`) holds no
+    /// repo of its own — the default depth is what keeps it from reading as empty
+    /// and being passed over in the `grove setup` menu.
+    #[test]
+    fn candidates_count_repos_nested_in_organizing_subfolders() {
+        let home = tempfile::tempdir().unwrap();
+        seed_repos(home.path(), "Developer/work", &["api", "web"]);
+        seed_repos(home.path(), "Developer/private", &["notes"]);
+        let c = candidates_in(home.path(), DEFAULT_DEPTH);
+        assert_eq!(names(&c), vec!["Developer"]);
+        assert_eq!(c[0].1, 3, "all three nested repos should count");
+        // Depth 1 sees only the two organizing folders, neither of them a repo.
+        assert!(candidates_in(home.path(), 1).is_empty());
     }
 
     #[test]
     fn candidates_empty_when_home_has_no_repo_folders() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join("empty")).unwrap();
-        assert!(candidates_in(home.path()).is_empty());
+        assert!(candidates_in(home.path(), DEFAULT_DEPTH).is_empty());
     }
 
     #[test]
@@ -422,7 +468,7 @@ mod tests {
             let refs: Vec<&str> = repos.iter().map(String::as_str).collect();
             seed_repos(home.path(), &format!("r{count}"), &refs);
         }
-        let c = candidates_in(home.path());
+        let c = candidates_in(home.path(), DEFAULT_DEPTH);
         assert_eq!(c.len(), 5);
         assert_eq!(names(&c), vec!["r8", "r7", "r6", "r5", "r4"]);
     }
