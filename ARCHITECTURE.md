@@ -25,7 +25,7 @@ grove/
       src/overview.rs            # `overview` (lg): collect the dashboard + render
       src/sync.rs                # `sync` (lgs) + `pull-all` (lgp) + `push-all` (lgpp): act, then overview
       src/tree.rs                # `tree` (lt): build the tree + render
-      src/remote.rs              # `ssh`: rewrite HTTPS remotes to SSH
+      src/remote.rs              # `ssh`: plan + apply the HTTPS→SSH rewrites
       src/passthrough.rs         # the git verbs (status/add/commit/pull/push): exec git
       src/ui.rs                  # colour + hyperlink + progress-bar discipline
 ```
@@ -68,6 +68,9 @@ same core call backs both the human table and `--json`:
 - `sync::act_pull_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_pull(&PullReport, &Hints)`
 - `sync::act_push_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_push(&PushReport, &Hints)`
 - `tree::collect(dir, level, all) -> TreeReport`, `tree::render_human(&TreeReport)`
+- `remote::plan(dir, depth) -> Plan`, `remote::apply(&[Rewrite]) -> (Vec<Rewrite>, Vec<RewriteFailure>)`;
+  `remote::report(dir, depth, yes) -> SshReport` is the `--json` flow over the two,
+  `remote::run` the interactive one (preview, ask, apply, dashboard)
 
 Every action returns what moved **and** what didn't: a repo git refused to move is
 a `Failure` (kind + git's own line), never an unexplained absence from the moved
@@ -91,7 +94,7 @@ hints name the user's actual aliases.
 ### `--json`, and why it is per-verb, not global
 
 `--json` is declared on the data-producing verbs (`overview`, `sync`,
-`pull-all`, `push-all`, `tree`) — not as a global flag. Two reasons:
+`pull-all`, `push-all`, `ssh`, `tree`) — not as a global flag. Two reasons:
 
 1. The passthrough git verbs can't emit grove JSON: they exec git, and git owns
    stdout.
@@ -104,6 +107,12 @@ itself, and `--quiet` on the fleet verbs and `ssh`; as global flags they would
 reach the passthrough verbs, where `grove pull --quiet` is git's to answer. The
 binary turns a verb's flags into the two `ui` switches (`ui::no_color`,
 `ui::quiet`) before anything is drawn, so `grove-core` reads no flags of its own.
+
+`ssh --json` never prompts: a machine caller can't answer one, so `-y` alone
+decides. Without it the document is the dry run — the planned rewrites, nothing
+touched, nothing fetched — and with it the rewrites are applied and the dashboard
+re-fetched, so the plan, what moved, what git refused and the resulting fleet
+arrive in one call.
 
 Output discipline (`ui.rs`): the command's **result** goes to stdout (the human
 view, or the `--json` document); **progress** — the "Fetching"/"Syncing" bars —
@@ -193,8 +202,9 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   `act_push_all` are the worktree-agnostic single-direction variants.
 - **`tree`** — a dependency-free tree walk (dirs first, Nerd-Font icons, git repos
   flagged).
-- **`remote`** — preview and (after confirmation) rewrite HTTPS remotes to SSH,
-  dropping any embedded credentials.
+- **`remote`** — plan the HTTPS→SSH rewrites (every remote, not just origin; any
+  embedded credentials masked in what it shows and dropped from the SSH URL), and
+  apply them after a yes — the prompt, or `-y`.
 - **`passthrough`** — exec git for the git verbs; `commit` is the one that
   spawns-and-waits because it may chain a push.
 - **`ui`** — one colour helper (ANSI, gated on `--no-color`, `NO_COLOR` and the

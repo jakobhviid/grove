@@ -59,7 +59,7 @@ convenience and are not expanded in scripts.
 
 ## Machine-readable output (for agents)
 
-`overview`, `sync`, `pull-all`, `push-all`, and `tree` take `--json` — one
+`overview`, `sync`, `pull-all`, `push-all`, `ssh`, and `tree` take `--json` — one
 document to stdout, progress to stderr, so the pipe stays clean:
 
 ```sh
@@ -67,12 +67,17 @@ grove overview ~/src --json     # {dir, repos:[{name,group,path,branch,https,web
 grove sync ~/src --json         # {synced:[{name,group,op}], overview:{...}}   ← act + re-check in one call
 grove pull-all ~/src --json     # {pulled:[label], overview:{...}}
 grove push-all ~/src --json     # {pushed:[label], overview:{...}}
+grove ssh ~/src --json          # {dir, dry_run:true, planned:[{name,group,path,remote,from,to}], switched:[], failed:[], overview:null}
+grove ssh ~/src --json -y       # the same plan, applied: switched, failed:[{…,detail}], and the re-fetched overview
 grove tree ~/src -l 1 --json    # {root, entries:[{name,type,is_repo,children:[...]}]}
 ```
 
 Convention for agents: run a verb with `--json`, gate on the counts (`summary`,
-`synced`, `pushed`), then act. The passthrough git verbs have no `--json` — they
-exec git, which owns their output; drive them by exit code as usual.
+`synced`, `pushed`), then act. `grove ssh --json` never prompts — without `-y` it
+is a dry run that changes and fetches nothing, so read `planned`, then re-run with
+`-y` to switch. Its `from` URLs have any embedded token masked (`https://***@host/…`).
+The passthrough git verbs have no `--json` — they exec git, which owns their
+output; drive them by exit code as usual.
 
 ## Interactive setup: the short aliases
 

@@ -214,15 +214,28 @@ fn split_host_path(url: &str) -> Option<(String, String)> {
     Some((host.to_string(), path.to_string()))
 }
 
-/// Point `remote` at `url` (`git remote set-url`). Returns whether it succeeded.
-pub fn set_remote_url(repo: &Path, remote: &str, url: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["remote", "set-url", remote, url])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+/// `url` with any credentials ahead of the host masked — `https://***@host/path`
+/// — so an HTTPS remote can be shown without printing the token some of them
+/// carry. A URL with no userinfo comes back unchanged.
+pub fn mask_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://***{}", &rest[at..]),
+        None => url.to_string(),
+    }
+}
+
+/// Point `remote` at `url` (`git remote set-url`), returning git's reason when it
+/// refuses (or `None` when it worked).
+pub fn set_remote_url(repo: &Path, remote: &str, url: &str) -> Option<String> {
+    match Command::new("git").arg("-C").arg(repo).args(["remote", "set-url", remote, url]).output() {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => Some(detail(&String::from_utf8_lossy(&out.stderr))),
+        Err(e) => Some(format!("could not run git: {e}")),
+    }
 }
 
 /// True if the current directory is inside a git work tree.
@@ -492,7 +505,7 @@ pub fn push(repo: &Path) -> Result<Option<Fail>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{browser_host, classify, detail, discover, https_to_ssh, remote_to_web, Trouble};
+    use super::{browser_host, classify, detail, discover, https_to_ssh, mask_credentials, remote_to_web, Trouble};
     use std::path::Path;
 
     /// Make `root/<rel>/.git` — enough for [`discover`] to count `rel` as a repo,
@@ -775,5 +788,14 @@ mod tests {
     #[test]
     fn an_unknown_single_label_host_is_left_alone() {
         assert_eq!(browser_host("grove-no-such-ssh-alias"), "grove-no-such-ssh-alias");
+    }
+
+    #[test]
+    fn credentials_are_masked_and_a_plain_url_is_left_alone() {
+        assert_eq!(mask_credentials("https://ghp_secret@github.com/o/r.git"), "https://***@github.com/o/r.git");
+        assert_eq!(mask_credentials("https://user:pw@git.example.com:8443/o/r"), "https://***@git.example.com:8443/o/r");
+        assert_eq!(mask_credentials("https://github.com/o/r.git"), "https://github.com/o/r.git");
+        // An `@` in the path is not userinfo.
+        assert_eq!(mask_credentials("https://host/o/r@v1"), "https://host/o/r@v1");
     }
 }

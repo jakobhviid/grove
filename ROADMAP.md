@@ -5,11 +5,6 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Planned / deferred
 
-- **`grove ssh --json`.** `ssh` is the one data-touching verb without a
-  machine-readable mode: it previews changes and asks for confirmation, but has
-  no `--json`. Add a `--json` document (the planned rewrites + what was applied),
-  consistent with `overview`/`sync`/`pull-all`/`push-all`/`tree`, so an agent can
-  drive the HTTPS→SSH migration.
 - **Completion parity for bash & fish.** The hand-written zsh completion delegates
   the git verbs to zsh's own `_git` and offers folder completion for the
   multi-repo verbs. bash and fish only get the clap-generated fallback, which
@@ -27,6 +22,11 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **`grove ssh --json`.** The HTTPS→SSH migration as one document: `planned`
+  lists every rewrite with its credentials masked, and `-y` applies it, adding
+  `switched`, `failed` (with git's reason) and the re-fetched dashboard. It never
+  prompts — without `-y` it is a dry run that touches and fetches nothing — so an
+  agent reads the plan, then switches.
 - **`--no-color` and `--quiet`.** Every verb grove draws itself takes `--no-color`,
   the flag form of `NO_COLOR`; the fleet verbs and `ssh` take `--quiet` (`-q`),
   which drops progress bars and notes but never errors. Per verb rather than

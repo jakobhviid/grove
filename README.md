@@ -78,7 +78,7 @@ straight to git, so flags, color, pager, signals, and exit codes are git's own.
 | `grove pull-all [dir]` | `lgp` | **Bulk pull**: pull every repo that is behind — fast-forwards the strictly-behind, and rebases/merges diverged ones per your `git pull` config (aborting cleanly on conflict); no push |
 | `grove push-all [dir]` | `lgpp` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
 | `grove tree [dir] [-a] [-l N]` | `lt` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon, folder names are clickable |
-| `grove ssh [dir] [-y]` | — | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `overview`/`sync`/`pull-all`/`push-all` can fetch them). Previews every change and asks first; `-y` skips the prompt |
+| `grove ssh [dir] [-y] [--json]` | — | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `overview`/`sync`/`pull-all`/`push-all` can fetch them). Previews every change and asks first; `-y` skips the prompt, `--json` hands back the plan (applied only with `-y`) |
 | `grove configure [key] [value]` | — | **Settings**: get/set `cache`, `cache_ttl`, `default_dir`, `depth` in `~/.config/grove/config` (no args lists them all) |
 
 The multi-repo commands (`overview`, `sync`, `pull-all`, `push-all`) operate on
@@ -142,9 +142,9 @@ setting.
 
 ## Machine-readable output (`--json`)
 
-The data-producing verbs — `overview`, `sync`, `pull-all`, `push-all`, `tree` —
-take `--json`, which emits one document to stdout (progress still goes to stderr,
-so the pipe stays clean):
+The data-producing verbs — `overview`, `sync`, `pull-all`, `push-all`, `ssh`,
+`tree` — take `--json`, which emits one document to stdout (progress still goes to
+stderr, so the pipe stays clean):
 
 ```sh
 grove overview ~/src --json | jq '.summary'
@@ -162,8 +162,22 @@ a failed fetch. So a script can tell "nothing to pull" from "couldn't pull":
 ```sh
 grove pull-all ~/src --json | jq -r '.failed[] | "\(.name): \(.kind) — \(.detail)"'
 grove overview ~/src --json | jq -r '.repos[] | select(.trouble == "denied") | .name'
-``` The passthrough git verbs have no `--json` — they `exec` git, and git owns
-their output.
+```
+
+`grove ssh --json` drives the HTTPS→SSH switch. It never prompts, so `-y` is the
+whole decision: without it the document is a dry run — `planned` lists every
+rewrite (`name`, `group`, `path`, `remote`, `from`, `to`), nothing is changed and
+nothing fetched — and with it the plan is applied, adding `switched`, `failed`
+(with git's `detail`) and the re-fetched `overview`. `from` never carries a token:
+embedded credentials show as `https://***@host/…`.
+
+```sh
+grove ssh ~/src --json | jq -r '.planned[] | "\(.path) \(.remote): \(.to)"'   # look first
+grove ssh ~/src --json -y | jq '.overview.summary'                            # then switch
+```
+
+The passthrough git verbs have no `--json` — they `exec` git, and git owns their
+output.
 
 ## Shell aliases
 
@@ -258,8 +272,9 @@ co  = grove commit          # your own shortcuts, too
 - **HTTPS remotes are flagged, not fetched.** Any repo whose `origin` is still
   on HTTPS is called out and skipped during fetch/sync — run **`grove ssh`** to
   rewrite them all to SSH (it previews each change and asks before touching
-  anything; embedded tokens are dropped, ports become `ssh://`, then it fetches
-  and reprints the dashboard so the switch is confirmed).
+  anything; embedded tokens are masked in the preview and dropped from the SSH
+  URL, ports become `ssh://`, then it fetches and reprints the dashboard so the
+  switch is confirmed).
 - **Sync is conservative; pull-all / push-all are the escape hatches.** `grove
   sync` (`lgs`) only touches clean repos with an upstream: it fast-forward-pulls
   the ones strictly behind and pushes the ones strictly ahead. Dirty, diverged,

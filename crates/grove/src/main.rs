@@ -116,6 +116,9 @@ enum Cmd {
         /// Apply without the confirmation prompt (required for non-interactive use).
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+        /// Emit the planned rewrites as JSON — a dry run unless -y, which applies them and adds the post-switch overview. Never prompts.
+        #[arg(long)]
+        json: bool,
         /// How many levels down to look for repos (1 = the immediate subdirectories only).
         #[arg(long)]
         depth: Option<usize>,
@@ -271,7 +274,7 @@ fn main() {
         Some(Cmd::Commit { all, push, message }) => run(grove_core::passthrough::commit(all, push, &message)),
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
-        Some(Cmd::Ssh { dir, yes, depth, .. }) => run(cmd_ssh(dir, yes, depth)),
+        Some(Cmd::Ssh { dir, yes, json, depth, .. }) => run(cmd_ssh(dir, yes, json, depth)),
         Some(Cmd::Overview { dir, json, force, depth, .. }) => run(cmd_overview(dir, json, force, depth)),
         Some(Cmd::Sync { dir, json, force, depth, .. }) => run(cmd_sync(dir, json, force, depth)),
         Some(Cmd::PullAll { dir, json, force, depth, .. }) => run(cmd_pull_all(dir, json, force, depth)),
@@ -383,12 +386,19 @@ fn above_fleet(fleet: &Path) -> bool {
 
 /// `grove ssh`: rewrite the HTTPS remotes under a folder to SSH. It walks the same
 /// repos the fleet verbs do — nested ones included — so a repo the dashboard flags
-/// as https is one this can switch.
-fn cmd_ssh(dir: Option<PathBuf>, yes: bool, depth: Option<usize>) -> anyhow::Result<()> {
+/// as https is one this can switch. The human flow previews and asks; `--json`
+/// never asks, so `-y` alone decides between the dry run and the switch.
+fn cmd_ssh(dir: Option<PathBuf>, yes: bool, json: bool, depth: Option<usize>) -> anyhow::Result<()> {
     let s = settings::load();
     let depth = s.scan_depth(depth);
     let dir = resolve_dir(dir, &s);
-    grove_core::remote::run(dir.as_deref(), depth, yes, &hints())
+    if json {
+        let report = grove_core::remote::report(dir.as_deref(), depth, yes)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        Ok(())
+    } else {
+        grove_core::remote::run(dir.as_deref(), depth, yes, &hints())
+    }
 }
 
 /// The multi-repo dashboard (`grove overview`, alias `lg`): resolve the folder,
@@ -567,5 +577,5 @@ fn print_suite_overview() {
     } else {
         println!("{}", paint("90", "Short aliases aren't installed yet — run `grove setup` to enable lg lgs lgp lgpp lt (and gs ga gc …)."));
     }
-    println!("{}", paint("90", "Machine-readable: `grove overview|sync|pull-all|push-all|tree --json`, or `grove --llm` for the full guide."));
+    println!("{}", paint("90", "Machine-readable: `grove overview|sync|pull-all|push-all|ssh|tree --json`, or `grove --llm` for the full guide."));
 }

@@ -664,6 +664,74 @@ fn a_repo_home_is_kept_and_scanned_to_the_full_depth() {
         .stdout(predicate::str::contains("4 repos"));
 }
 
+/// A fleet whose remotes are still on HTTPS — one carrying a token — plus a fork
+/// with an `upstream`. Fetching never reaches a network: `ssh_stub` answers every
+/// SSH dial with a refusal, the way a host does when your key isn't on it.
+#[cfg(unix)]
+fn https_fleet(fleet: &std::path::Path, ssh_stub: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(ssh_stub, "#!/bin/sh\necho 'git@example.invalid: Permission denied (publickey).' >&2\nexit 255\n").unwrap();
+    fs::set_permissions(ssh_stub, fs::Permissions::from_mode(0o755)).unwrap();
+    for (rel, url) in [("alpha", "https://ghp_secret@example.invalid/o/alpha.git"), ("work/api", "https://example.invalid/o/api.git")] {
+        let repo = fleet.join(rel);
+        fs::create_dir_all(&repo).unwrap();
+        Command::new("git").current_dir(&repo).args(["init", "-q"]).assert().success();
+        Command::new("git").current_dir(&repo).args(["remote", "add", "origin", url]).assert().success();
+    }
+    Command::new("git").current_dir(fleet.join("work/api")).args(["remote", "add", "upstream", "https://example.invalid/up/api.git"]).assert().success();
+}
+
+#[cfg(unix)]
+fn origin_url(repo: &std::path::Path) -> String {
+    let out = Command::new("git").current_dir(repo).args(["remote", "get-url", "origin"]).output().unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[cfg(unix)]
+#[test]
+fn ssh_json_without_yes_is_a_dry_run_that_changes_nothing() {
+    // An agent reads the plan first: every HTTPS remote, nested and non-origin ones
+    // included, with the token masked — and not one remote touched, nothing fetched.
+    let home = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    let stub = home.path().join("refusing-ssh");
+    https_fleet(fleet.path(), &stub);
+
+    let out = grove(home.path()).env("GIT_SSH_COMMAND", &stub).args(["ssh", "--json"]).arg(fleet.path()).assert().success();
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["overview"], serde_json::Value::Null, "a dry run fetches nothing");
+    assert_eq!(json["switched"].as_array().unwrap().len(), 0);
+    let planned = json["planned"].as_array().unwrap();
+    let rows: Vec<(String, String)> =
+        planned.iter().map(|p| (format!("{}/{}", p["group"].as_str().unwrap_or(""), p["name"].as_str().unwrap()), p["remote"].as_str().unwrap().to_string())).collect();
+    assert_eq!(rows, [("/alpha", "origin"), ("work/api", "origin"), ("work/api", "upstream")].map(|(a, b)| (a.to_string(), b.to_string())));
+    assert_eq!(planned[0]["from"], "https://***@example.invalid/o/alpha.git", "the token never reaches the document");
+    assert_eq!(planned[0]["to"], "git@example.invalid:o/alpha.git");
+    assert!(!String::from_utf8_lossy(&out.get_output().stdout).contains("ghp_secret"));
+    assert_eq!(origin_url(&fleet.path().join("alpha")), "https://ghp_secret@example.invalid/o/alpha.git", "a dry run left the remote alone");
+}
+
+#[cfg(unix)]
+#[test]
+fn ssh_json_with_yes_switches_and_reports_the_fresh_dashboard() {
+    let home = tempdir().unwrap();
+    let fleet = tempdir().unwrap();
+    let stub = home.path().join("refusing-ssh");
+    https_fleet(fleet.path(), &stub);
+
+    let out = grove(home.path()).env("GIT_SSH_COMMAND", &stub).args(["ssh", "--json", "-y"]).arg(fleet.path()).assert().success();
+    let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    assert_eq!(json["dry_run"], false);
+    assert_eq!(json["switched"].as_array().unwrap().len(), 3);
+    assert_eq!(json["failed"].as_array().unwrap().len(), 0);
+    assert_eq!(origin_url(&fleet.path().join("work/api")), "git@example.invalid:o/api.git");
+    // The dashboard was fetched after the switch: no repo is https any more, and the
+    // refused SSH dial shows up as the trouble it is.
+    assert_eq!(json["overview"]["summary"]["https"], 0);
+    assert_eq!(json["overview"]["summary"]["denied"], 2);
+}
+
 #[test]
 fn quiet_drops_the_notes_on_stderr() {
     // The default_dir fallback explains itself on stderr; --quiet keeps the run silent
