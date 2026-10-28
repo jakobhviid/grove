@@ -24,7 +24,7 @@ grove/
       src/git.rs                 # discover repos, read state by shelling out to git
       src/overview.rs            # `overview` (lg): collect the dashboard + render
       src/sync.rs                # `sync` (lgs) + `pull-all` (lgp) + `push-all` (lgpp): act, then overview
-      src/tree.rs                # `tree` (lt): build the tree + render
+      src/tree.rs                # `tree` (lt): build the tree (git-ignore aware) + render with file-type icons
       src/remote.rs              # `ssh`: plan + apply the HTTPS→SSH rewrites
       src/passthrough.rs         # the git verbs (status/add/commit/pull/push): exec git
       src/ui.rs                  # colour + hyperlink + progress-bar discipline
@@ -67,7 +67,7 @@ same core call backs both the human table and `--json`:
 - `sync::act_sync(&Report) -> (Vec<Synced>, Vec<Failure>)`, `sync::render_human(&SyncReport, &Hints)`
 - `sync::act_pull_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_pull(&PullReport, &Hints)`
 - `sync::act_push_all(&Report) -> (Vec<String>, Vec<Failure>)`, `sync::render_push(&PushReport, &Hints)`
-- `tree::collect(dir, level, all) -> TreeReport`, `tree::render_human(&TreeReport)`
+- `tree::collect(dir, &Options) -> TreeReport`, `tree::render_human(&TreeReport)`
 - `remote::plan(dir, depth) -> Plan`, `remote::apply(&[Rewrite]) -> (Vec<Rewrite>, Vec<RewriteFailure>)`;
   `remote::report(dir, depth, yes) -> SshReport` is the `--json` flow over the two,
   `remote::run` the interactive one (preview, ask, apply, dashboard)
@@ -173,7 +173,9 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   when that is itself a repo — so submodules, vendored clones and `node_modules`
   stay out of the walk and a fleet verb run inside a project costs one `read_dir`.
   `is_https`/`web_url`/`ahead_behind`/`dirty`/`fetch`/`pull`/`push` read or act on
-  one repo. Two of
+  one repo, and `ignored` asks `git check-ignore` which entries of a folder git
+  ignores — git's own answer, so nested `.gitignore`s, `info/exclude` and
+  `core.excludesFile` all apply and a tracked file is never hidden. Two of
   them read origin for different questions: `is_https` wants the URL git dials,
   so it takes `git remote get-url` with `insteadOf` rewriting applied; `web_url`
   wants a page a browser can open, so it takes the URL as written and expands any
@@ -200,8 +202,11 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
 - **`sync`** — the actions, run off a collected `Report`: `act_sync` ff-pulls the
   strictly-behind and pushes the strictly-ahead clean repos; `act_pull_all` /
   `act_push_all` are the worktree-agnostic single-direction variants.
-- **`tree`** — a dependency-free tree walk (dirs first, Nerd-Font icons, git repos
-  flagged).
+- **`tree`** — a dependency-free tree walk (dirs first, git repos flagged, files
+  iconed by type from a built-in name/extension table). With `git_ignore` it asks
+  `git::ignored` once per folder inside a work tree, tracking down the walk whether
+  it is in one, so a folder of repos is listed whole and each repo is filtered by
+  its own rules.
 - **`remote`** — plan the HTTPS→SSH rewrites (every remote, not just origin; any
   embedded credentials masked in what it shows and dropped from the SSH URL), and
   apply them after a yes — the prompt, or `-y`.

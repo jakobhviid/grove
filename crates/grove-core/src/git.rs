@@ -4,8 +4,10 @@
 //! exactly matching the shell functions grove replaces.
 use anyhow::Result;
 use serde::Serialize;
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub struct Repo {
     pub path: PathBuf,
@@ -245,6 +247,55 @@ pub fn inside_repo() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// True if `dir` is inside a git work tree (its root or anywhere below it).
+pub fn in_worktree(dir: &Path) -> bool {
+    git_out(dir, &["rev-parse", "--is-inside-work-tree"]).is_some_and(|o| o == "true")
+}
+
+/// Which of `names` — entries of the folder `dir` — git ignores. git answers
+/// itself, so every rule it honours applies: the `.gitignore` in each folder,
+/// `.git/info/exclude`, and the global `core.excludesFile`. A tracked file is
+/// never ignored, as in git. Outside a work tree nothing is.
+///
+/// One `git check-ignore` per folder, fed the names on stdin. Each goes in as
+/// `./name`: pathspec magic is only read at the start of a path, so a file called
+/// `:x` is asked about as itself (`check-ignore` refuses `GIT_LITERAL_PATHSPECS`).
+pub fn ignored(dir: &Path, names: &[String]) -> HashSet<String> {
+    if names.is_empty() {
+        return HashSet::new();
+    }
+    let spawned = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["check-ignore", "--stdin", "-z"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = spawned else {
+        return HashSet::new();
+    };
+    let input: Vec<u8> = names.iter().flat_map(|n| "./".bytes().chain(n.bytes()).chain([0])).collect();
+    // Feed stdin from its own thread: git answers while it reads, and a folder big
+    // enough to fill the stdout pipe would otherwise leave both sides waiting.
+    let stdin = child.stdin.take();
+    let writer = std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(&input);
+        }
+    });
+    let out = child.wait_with_output();
+    let _ = writer.join();
+    let Ok(out) = out else {
+        return HashSet::new();
+    };
+    out.stdout
+        .split(|&b| b == 0)
+        .filter_map(|s| s.strip_prefix(b"./"))
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect()
 }
 
 pub fn branch(repo: &Path) -> String {
@@ -505,8 +556,10 @@ pub fn push(repo: &Path) -> Result<Option<Fail>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{browser_host, classify, detail, discover, https_to_ssh, mask_credentials, remote_to_web, Trouble};
+    use super::{browser_host, classify, detail, discover, https_to_ssh, ignored, in_worktree, mask_credentials, remote_to_web, Trouble};
+    use std::collections::HashSet;
     use std::path::Path;
+    use std::process::Command;
 
     /// Make `root/<rel>/.git` — enough for [`discover`] to count `rel` as a repo,
     /// without needing a real git tree.
@@ -797,5 +850,33 @@ mod tests {
         assert_eq!(mask_credentials("https://github.com/o/r.git"), "https://github.com/o/r.git");
         // An `@` in the path is not userinfo.
         assert_eq!(mask_credentials("https://host/o/r@v1"), "https://host/o/r@v1");
+    }
+
+    #[test]
+    fn ignored_asks_git_and_spares_tracked_files() {
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git").arg("-C").arg(root.path()).args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.path().join(".gitignore"), "target/\n*.log\n:odd\n").unwrap();
+        std::fs::create_dir(root.path().join("target")).unwrap();
+        for f in ["app.log", "kept.log", "main.rs", ":odd"] {
+            std::fs::write(root.path().join(f), "").unwrap();
+        }
+        // Tracked despite matching `*.log`: git doesn't ignore what it tracks.
+        git(&["add", "-f", "kept.log"]);
+        let names: Vec<String> = ["target", "app.log", "kept.log", "main.rs", ".gitignore", ":odd"].map(String::from).to_vec();
+        let want = HashSet::from(["target", "app.log", ":odd"].map(String::from));
+        assert_eq!(ignored(root.path(), &names), want, "a name that looks like pathspec magic is asked about literally");
+    }
+
+    #[test]
+    fn nothing_is_ignored_outside_a_work_tree() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("x.log"), "").unwrap();
+        assert!(!in_worktree(root.path()));
+        assert!(ignored(root.path(), &["x.log".to_string()]).is_empty());
     }
 }

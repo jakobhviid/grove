@@ -199,6 +199,9 @@ enum Cmd {
         /// Show hidden entries (dotfiles) too.
         #[arg(short, long)]
         all: bool,
+        /// Leave out what git ignores (.gitignore, .git/info/exclude, core.excludesFile), repo by repo.
+        #[arg(short = 'g', long = "git-ignore")]
+        git_ignore: bool,
         /// Emit the tree as JSON instead of the human view.
         #[arg(long)]
         json: bool,
@@ -279,7 +282,9 @@ fn main() {
         Some(Cmd::Sync { dir, json, force, depth, .. }) => run(cmd_sync(dir, json, force, depth)),
         Some(Cmd::PullAll { dir, json, force, depth, .. }) => run(cmd_pull_all(dir, json, force, depth)),
         Some(Cmd::PushAll { dir, json, force, depth, .. }) => run(cmd_push_all(dir, json, force, depth)),
-        Some(Cmd::Tree { dir, level, all, json, .. }) => run(cmd_tree(dir, level, all, json)),
+        Some(Cmd::Tree { dir, level, all, git_ignore, json, .. }) => {
+            run(cmd_tree(dir, grove_core::tree::Options { level, all, git_ignore }, json))
+        }
         Some(Cmd::Setup { shell, force, reload, no_reload, .. }) => {
             run(config::setup(shell, force, config::Reload::from_flags(reload, no_reload, force)))
         }
@@ -475,8 +480,8 @@ fn cmd_push_all(dir: Option<PathBuf>, json: bool, force: bool, depth: Option<usi
 }
 
 /// `grove tree` (alias `lt`): build the tree, then render the human view or JSON.
-fn cmd_tree(dir: Option<PathBuf>, level: usize, all: bool, json: bool) -> anyhow::Result<()> {
-    let report = grove_core::tree::collect(dir.as_deref(), level, all)?;
+fn cmd_tree(dir: Option<PathBuf>, opts: grove_core::tree::Options, json: bool) -> anyhow::Result<()> {
+    let report = grove_core::tree::collect(dir.as_deref(), &opts)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -561,7 +566,7 @@ fn print_suite_overview() {
     row("grove ssh [dir]", "switch HTTPS remotes to SSH (previews & asks first)");
 
     hdr("FILES");
-    row("grove tree [dir] [-a]", &format!("tree view; git repos get a git icon  ({})", alias("grove tree", "lt")));
+    row("grove tree [dir] [-a]", &format!("tree view; git repos get a git icon (-g: leave out what git ignores)  ({})", alias("grove tree", "lt")));
 
     hdr("SHELL ALIASES  (short names — gs ga gc gcp gp gpp, and lg lgs lgp lgpp lt)");
     row("grove setup [sh]", "provision your shell: writes the grove file + rc line (one-stop)");

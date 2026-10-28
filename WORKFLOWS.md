@@ -34,7 +34,7 @@ grove push-all [dir] [-f]  # push every repo with unpushed commits, then overvie
                            #   -f / --force: re-fetch every repo, bypassing the per-repo cache
                            #   --depth N:    levels to look down for repos (default 2)
                            #   -q / --quiet: no progress bars or notes on stderr
-grove tree    [dir] [-a] [-l N]   # tree view; git repos get a git icon (alias: lt)
+grove tree    [dir] [-a] [-g] [-l N]  # tree view; git repos get a git icon, -g leaves out what git ignores (alias: lt)
 grove ssh     [dir] [-y]  # switch a folder's HTTPS remotes to SSH (previews & asks; -y skips)
 grove configure [key] [value]     # get/set settings: cache, cache_ttl, default_dir, depth
 ```

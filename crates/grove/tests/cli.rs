@@ -733,6 +733,30 @@ fn ssh_json_with_yes_switches_and_reports_the_fresh_dashboard() {
 }
 
 #[test]
+fn tree_git_ignore_leaves_out_what_git_ignores_and_keeps_what_it_tracks() {
+    let home = tempdir().unwrap();
+    let root = tempdir().unwrap();
+    let repo = root.path().join("app");
+    fs::create_dir_all(repo.join("target")).unwrap();
+    fs::create_dir_all(repo.join("src")).unwrap();
+    Command::new("git").current_dir(&repo).args(["init", "-q"]).assert().success();
+    fs::write(repo.join(".gitignore"), "target/\n*.log\n").unwrap();
+    for f in ["src/main.rs", "debug.log", "kept.log"] {
+        fs::write(repo.join(f), "").unwrap();
+    }
+    Command::new("git").current_dir(&repo).args(["add", "-f", "kept.log"]).assert().success();
+
+    let names = |args: &[&str]| -> Vec<String> {
+        let out = grove(home.path()).args(["tree", "--json", "-l", "2"]).args(args).arg(root.path()).assert().success();
+        let json: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+        // The tree is rooted at a plain folder holding the repo: its rules apply inside it.
+        json["entries"][0]["children"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(names(&[]), ["src", "target", "debug.log", "kept.log"]);
+    assert_eq!(names(&["--git-ignore"]), ["src", "kept.log"], "ignored entries go; a tracked file stays");
+}
+
+#[test]
 fn quiet_drops_the_notes_on_stderr() {
     // The default_dir fallback explains itself on stderr; --quiet keeps the run silent
     // there and leaves the result on stdout untouched.

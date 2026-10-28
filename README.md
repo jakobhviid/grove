@@ -77,7 +77,7 @@ straight to git, so flags, color, pager, signals, and exit codes are git's own.
 | `grove sync [dir]` | `lgs` | **Sync**: fast-forward-pull the behind repos and push the ahead ones (only clean, in-sync ones), then show the dashboard |
 | `grove pull-all [dir]` | `lgp` | **Bulk pull**: pull every repo that is behind — fast-forwards the strictly-behind, and rebases/merges diverged ones per your `git pull` config (aborting cleanly on conflict); no push |
 | `grove push-all [dir]` | `lgpp` | **Bulk push**: push every repo with unpushed commits, then show the dashboard (no pull) |
-| `grove tree [dir] [-a] [-l N]` | `lt` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles); git repos get a git icon, folder names are clickable |
+| `grove tree [dir] [-a] [-g] [-l N]` | `lt` | **Tree** view (2 levels by default, `-l` to change, `-a` for dotfiles, `-g` to leave out what git ignores); files get an icon by type, git repos a git icon, folder names are clickable |
 | `grove ssh [dir] [-y] [--json]` | — | **Switch to SSH**: rewrite the HTTPS remotes of every repo in a folder to SSH (so `overview`/`sync`/`pull-all`/`push-all` can fetch them). Previews every change and asks first; `-y` skips the prompt, `--json` hands back the plan (applied only with `-y`) |
 | `grove configure [key] [value]` | — | **Settings**: get/set `cache`, `cache_ttl`, `default_dir`, `depth` in `~/.config/grove/config` (no args lists them all) |
 
@@ -299,8 +299,14 @@ co  = grove commit          # your own shortcuts, too
   configuring anything. Rows are ordered by the folder that holds them and print it
   as a prefix (`work/api`); `depth` and `--depth` set how far down to look.
 - **Tree (`grove tree`, alias `lt`)** has no external dependencies (no eza),
-  lists directories before files, hides dotfiles unless `-a` is given, and makes
-  folder names clickable (a `file://` link that opens the directory).
+  lists directories before files, hides dotfiles unless `-a` is given, gives each
+  file an icon by its type (`.rs`, `.py`, `Dockerfile`, `Cargo.lock`, images,
+  archives, …), and makes folder names clickable (a `file://` link that opens the
+  directory). **`-g` / `--git-ignore`** leaves out what git ignores, by asking git
+  itself — so every `.gitignore` on the way down, `.git/info/exclude` and your
+  global `core.excludesFile` apply, and a tracked file always shows. Run from a
+  folder of repos, it lists the folder whole and filters each repo by its own
+  rules.
 - **Colour and progress.** Colour appears only on a terminal, and the progress
   bars only when stderr is one. `--no-color` (or `NO_COLOR=1`) turns colour off on
   any verb grove draws itself; `--quiet` (`-q`) on the multi-repo verbs and `ssh`

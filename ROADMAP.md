@@ -10,8 +10,6 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
   multi-repo verbs. bash and fish only get the clap-generated fallback, which
   does neither. Either hand-write bash/fish equivalents or enrich the generated
   ones.
-- **`tree` polish.** Optional `.gitignore` awareness and file-type-aware icons,
-  so it reads closer to `eza --tree` without taking on `eza`'s dependency weight.
 
 ## Known gaps
 
@@ -22,6 +20,10 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **`tree` polish.** `--git-ignore` (`-g`) leaves out what git ignores, asking
+  `git check-ignore` folder by folder so nested `.gitignore`s, `info/exclude` and
+  `core.excludesFile` all apply and tracked files stay. Files get a Nerd Font icon
+  by name or extension from a built-in table. No new dependency.
 - **`grove ssh --json`.** The HTTPS→SSH migration as one document: `planned`
   lists every rewrite with its credentials masked, and `-y` applies it, adding
   `switched`, `failed` (with git's reason) and the re-fetched dashboard. It never
