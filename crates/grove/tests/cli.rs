@@ -663,3 +663,22 @@ fn a_repo_home_is_kept_and_scanned_to_the_full_depth() {
         .stdout(predicate::str::contains("work/api"))
         .stdout(predicate::str::contains("4 repos"));
 }
+
+#[test]
+fn quiet_drops_the_notes_on_stderr() {
+    // The default_dir fallback explains itself on stderr; --quiet keeps the run silent
+    // there and leaves the result on stdout untouched.
+    let home = tempdir().unwrap();
+    let cache = tempdir().unwrap();
+    let dest = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    grove(home.path()).args(["configure", "default_dir"]).arg(dest.path()).assert().success();
+    grove(home.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .current_dir(cwd.path())
+        .args(["overview", "--quiet", "--no-color"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains("No git repositories"));
+}

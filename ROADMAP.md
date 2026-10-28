@@ -22,11 +22,15 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 - Windows is unsupported by design (the passthrough verbs `exec`-replace with git
   on Unix; the release targets are macOS + Linux only).
-- Progress bars and colour are TTY-gated but there is no `--no-color` / `--quiet`
-  flag; suppress colour with `NO_COLOR`.
+- The bare `grove` listing takes no flags, so its colour is turned off with
+  `NO_COLOR` rather than `--no-color`.
 
 ## Done
 
+- **`--no-color` and `--quiet`.** Every verb grove draws itself takes `--no-color`,
+  the flag form of `NO_COLOR`; the fleet verbs and `ssh` take `--quiet` (`-q`),
+  which drops progress bars and notes but never errors. Per verb rather than
+  global, so `grove pull --quiet` is git's.
 - **Repos in organizing subfolders.** The fleet verbs scanned only the *immediate*
   subdirectories, so a repo home split into `work/` and `private/` read as empty.
   They now scan two levels by default (`depth`, with `--depth N` per run), order the

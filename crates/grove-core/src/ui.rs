@@ -5,20 +5,46 @@
 //! exactly once, so every call agrees) and keyed to the stream the helper writes
 //! to: `paint` colors stdout content, so it gates on stdout; `err` writes to
 //! stderr, so it gates on stderr.
+//!
+//! Two switches the binary flips from a verb's flags before it draws anything:
+//! [`no_color`] (`--no-color`) turns colour off on both streams, and [`quiet`]
+//! (`--quiet`) silences the stderr chatter — progress bars and notes, never errors.
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{self, IsTerminal};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-/// Whether to emit ANSI on stdout — `NO_COLOR` unset AND stdout is a terminal.
-fn stdout_color() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal())
+static PLAIN: AtomicBool = AtomicBool::new(false);
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// Colour off for the rest of the run, whatever the terminal — `--no-color`, the
+/// flag form of `NO_COLOR` (either one is enough).
+pub fn no_color() {
+    PLAIN.store(true, Ordering::Relaxed);
 }
 
-/// Whether to emit ANSI on stderr — `NO_COLOR` unset AND stderr is a terminal.
+/// No progress bars and no notes for the rest of the run — `--quiet`. Errors
+/// always print: being quiet is about the chatter, not about hiding a failure.
+pub fn quiet() {
+    QUIET.store(true, Ordering::Relaxed);
+}
+
+fn is_quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
+/// Whether to emit ANSI on stdout — no `--no-color`, `NO_COLOR` unset, AND stdout
+/// is a terminal.
+fn stdout_color() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    !PLAIN.load(Ordering::Relaxed) && *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal())
+}
+
+/// Whether to emit ANSI on stderr — no `--no-color`, `NO_COLOR` unset, AND stderr
+/// is a terminal.
 fn stderr_color() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && io::stderr().is_terminal())
+    !PLAIN.load(Ordering::Relaxed) && *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && io::stderr().is_terminal())
 }
 
 /// Wrap `s` in an ANSI SGR code (e.g. "1;34"), unless color is off / stdout isn't a TTY.
@@ -58,8 +84,11 @@ pub fn open(path: &str, text: &str) -> String {
 
 /// A dim, secondary note to stderr — context like "no repos here, showing your
 /// default folder". Kept off stdout so `--json` and piped output stay clean,
-/// exactly like the progress bar.
+/// exactly like the progress bar, and dropped entirely under `--quiet`.
 pub fn note(m: &str) {
+    if is_quiet() {
+        return;
+    }
     if stderr_color() {
         eprintln!("\x1b[90m{m}\x1b[0m");
     } else {
@@ -80,11 +109,19 @@ pub fn err(m: &str) {
 /// A determinate progress bar that animates via a steady tick (spinner +
 /// elapsed), so it reads as live even while parallel work is in flight rather
 /// than looking frozen between updates. Leads with the count (`Fetching 3/12`).
-/// Draws to stderr; auto-hidden when not a TTY.
+/// Draws to stderr; auto-hidden when not a TTY, and never drawn under `--quiet`.
 pub fn bar(len: u64, msg: &str) -> ProgressBar {
+    if is_quiet() {
+        return ProgressBar::hidden();
+    }
     let pb = ProgressBar::new(len);
+    let template = if stderr_color() {
+        "  {spinner:.cyan} {msg} {pos}/{len} [{bar:24.cyan/blue}] {elapsed}"
+    } else {
+        "  {spinner} {msg} {pos}/{len} [{bar:24}] {elapsed}"
+    };
     pb.set_style(
-        ProgressStyle::with_template("  {spinner:.cyan} {msg} {pos}/{len} [{bar:24.cyan/blue}] {elapsed}")
+        ProgressStyle::with_template(template)
             .unwrap()
             .progress_chars("=>-")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),

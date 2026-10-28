@@ -90,8 +90,8 @@ hints name the user's actual aliases.
 
 ### `--json`, and why it is per-verb, not global
 
-`--json` is declared on the four data-producing verbs (`overview`, `sync`,
-`push-all`, `tree`) — not as a global flag. Two reasons:
+`--json` is declared on the data-producing verbs (`overview`, `sync`,
+`pull-all`, `push-all`, `tree`) — not as a global flag. Two reasons:
 
 1. The passthrough git verbs can't emit grove JSON: they exec git, and git owns
    stdout.
@@ -99,9 +99,16 @@ hints name the user's actual aliases.
    `grove commit fix the --json bug` swallow or misfire the flag. `--llm` is
    non-global for the same reason.
 
+The output flags follow the same rule. `--no-color` sits on every verb grove draws
+itself, and `--quiet` on the fleet verbs and `ssh`; as global flags they would
+reach the passthrough verbs, where `grove pull --quiet` is git's to answer. The
+binary turns a verb's flags into the two `ui` switches (`ui::no_color`,
+`ui::quiet`) before anything is drawn, so `grove-core` reads no flags of its own.
+
 Output discipline (`ui.rs`): the command's **result** goes to stdout (the human
 view, or the `--json` document); **progress** — the "Fetching"/"Syncing" bars —
-goes to stderr, and auto-hides when stdout isn't a terminal. So `grove overview
+and the dim notes go to stderr. The bars auto-hide when stderr isn't a terminal,
+and `--quiet` drops bars and notes alike (errors always print). So `grove overview
 --json | jq` stays pipe-clean while a human still sees progress.
 
 ### Settings, cache, and the default-dir fallback (binary-owned)
@@ -190,9 +197,9 @@ Anything that reaches into the environment (XDG paths, `$HOME`) lives in the
   dropping any embedded credentials.
 - **`passthrough`** — exec git for the git verbs; `commit` is the one that
   spawns-and-waits because it may chain a push.
-- **`ui`** — one colour helper (ANSI, gated on `NO_COLOR` + TTY, computed once),
-  OSC 8 hyperlinks (only on terminals that support them), the shared progress
-  bar, and the red-✗ error line. No colour crate.
+- **`ui`** — one colour helper (ANSI, gated on `--no-color`, `NO_COLOR` and the
+  TTY), OSC 8 hyperlinks (only on terminals that support them), the shared progress
+  bar (hidden under `--quiet`), and the red-✗ error line. No colour crate.
 
 ## Note for the house guidelines
 

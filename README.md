@@ -85,7 +85,9 @@ The multi-repo commands (`overview`, `sync`, `pull-all`, `push-all`) operate on
 the repos under a folder (default: the current directory), **two levels deep** —
 so they cover both the repos sitting in it and the ones you have sorted into
 subfolders like `work/` and `private/`. `--version`/`-V` and a man page are
-available; the data tools take **`--json`** (see below). Run bare `grove` for a
+available; the data tools take **`--json`** (see below), every verb grove draws
+itself takes **`--no-color`**, and the multi-repo verbs and `ssh` take
+**`--quiet`** (`-q`). Run bare `grove` for a
 one-screen overview of the whole suite. Set a **`default_dir`** — `grove setup`
 shows a menu of the repo folders under your home to pick from, or set it with
 `grove configure default_dir <path>` — and the multi-repo verbs fall back to it
@@ -284,6 +286,12 @@ co  = grove commit          # your own shortcuts, too
 - **Tree (`grove tree`, alias `lt`)** has no external dependencies (no eza),
   lists directories before files, hides dotfiles unless `-a` is given, and makes
   folder names clickable (a `file://` link that opens the directory).
+- **Colour and progress.** Colour appears only on a terminal, and the progress
+  bars only when stderr is one. `--no-color` (or `NO_COLOR=1`) turns colour off on
+  any verb grove draws itself; `--quiet` (`-q`) on the multi-repo verbs and `ssh`
+  drops the progress bars and the dim notes (like the `default_dir` one) while
+  keeping the result and any error. Both are per verb, so `grove pull --quiet`
+  goes to git.
 - **Nerd Font icons** — use a Nerd Font for `grove tree` and the dashboard's
   forge links to render correctly. The trouble marks are ordinary Unicode, one cell
   wide, so the information you need when a repo is stuck renders in any monospace

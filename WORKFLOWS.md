@@ -33,10 +33,14 @@ grove pull-all [dir] [-f]  # pull every behind repo (ff + rebase/merge diverged 
 grove push-all [dir] [-f]  # push every repo with unpushed commits, then overview (alias: lgpp)
                            #   -f / --force: re-fetch every repo, bypassing the per-repo cache
                            #   --depth N:    levels to look down for repos (default 2)
+                           #   -q / --quiet: no progress bars or notes on stderr
 grove tree    [dir] [-a] [-l N]   # tree view; git repos get a git icon (alias: lt)
 grove ssh     [dir] [-y]  # switch a folder's HTTPS remotes to SSH (previews & asks; -y skips)
 grove configure [key] [value]     # get/set settings: cache, cache_ttl, default_dir, depth
 ```
+
+Every verb grove draws itself takes `--no-color` (the flag form of `NO_COLOR`).
+The git verbs don't: their output, flags included, is git's.
 
 The multi-repo verbs cover the repos **two levels down** by default: the ones
 sitting in the folder and the ones you have sorted into subfolders like `work/`

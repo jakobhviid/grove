@@ -28,12 +28,51 @@ struct Cli {
     /// Print the full LLM-readable guide (the whole command suite + repo link) and exit.
     // Deliberately NOT `global`: a global flag would let `grove commit fix the
     // --llm bug` swallow the message and print the guide instead of committing.
-    // (The multi-repo verbs take a `--json` flag directly; the passthrough git
-    // verbs can't, since they exec git and it owns stdout.)
+    // (The verbs grove renders take `--json`/`--no-color`/`--quiet` directly; the
+    // passthrough git verbs can't, since they exec git and it owns stdout.)
     #[arg(long)]
     llm: bool,
     #[command(subcommand)]
     cmd: Option<Cmd>,
+}
+
+/// `--no-color`, on every verb that draws its own output. Declared per verb, never
+/// global, for the reason `--llm` isn't: a global flag would reach the passthrough
+/// git verbs, whose arguments — and output — are git's.
+#[derive(clap::Args)]
+struct Plain {
+    /// No colour — the flag form of NO_COLOR.
+    #[arg(long = "no-color")]
+    no_color: bool,
+}
+
+impl Plain {
+    fn apply(&self) {
+        if self.no_color {
+            grove_core::ui::no_color();
+        }
+    }
+}
+
+/// The fleet verbs' output flags: `--no-color`, plus `--quiet` for the progress
+/// bars and notes they write to stderr. A global `--quiet` would take
+/// `grove pull --quiet` away from git, so this is per verb too.
+#[derive(clap::Args)]
+struct Output {
+    #[command(flatten)]
+    plain: Plain,
+    /// No progress bars or notes on stderr — just the result (errors always print).
+    #[arg(short, long)]
+    quiet: bool,
+}
+
+impl Output {
+    fn apply(&self) {
+        self.plain.apply();
+        if self.quiet {
+            grove_core::ui::quiet();
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -80,6 +119,8 @@ enum Cmd {
         /// How many levels down to look for repos (1 = the immediate subdirectories only).
         #[arg(long)]
         depth: Option<usize>,
+        #[command(flatten)]
+        out: Output,
     },
     /// Multi-repo dashboard: branch, ahead/behind, dirty state, and a forge link per repo in a folder (alias: lg).
     Overview {
@@ -94,6 +135,8 @@ enum Cmd {
         /// How many levels down to look for repos (1 = the immediate subdirectories only).
         #[arg(long)]
         depth: Option<usize>,
+        #[command(flatten)]
+        out: Output,
     },
     /// Fast-forward-pull the behind repos and push the ahead ones (clean, in-sync only), then show the overview (alias: lgs).
     Sync {
@@ -108,6 +151,8 @@ enum Cmd {
         /// How many levels down to look for repos (1 = the immediate subdirectories only).
         #[arg(long)]
         depth: Option<usize>,
+        #[command(flatten)]
+        out: Output,
     },
     /// Fast-forward every repo in a folder that is behind its upstream (no push), then show the overview (alias: lgp).
     PullAll {
@@ -122,6 +167,8 @@ enum Cmd {
         /// How many levels down to look for repos (1 = the immediate subdirectories only).
         #[arg(long)]
         depth: Option<usize>,
+        #[command(flatten)]
+        out: Output,
     },
     /// Push every repo in a folder that has unpushed commits (no pull), then show the overview (alias: lgpp).
     PushAll {
@@ -136,6 +183,8 @@ enum Cmd {
         /// How many levels down to look for repos (1 = the immediate subdirectories only).
         #[arg(long)]
         depth: Option<usize>,
+        #[command(flatten)]
+        out: Output,
     },
     /// Tree view (dirs first, Nerd-Font icons); git repos get a git icon (alias: lt).
     Tree {
@@ -150,6 +199,8 @@ enum Cmd {
         /// Emit the tree as JSON instead of the human view.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        plain: Plain,
     },
     /// Provision your shell: write the grove file and add the load line to your rc (idempotent). Auto-detects the shell if omitted. On a terminal it then offers to start a fresh shell so the aliases work right away; `eval "$(grove setup)"` activates them in the current one instead.
     Setup {
@@ -163,17 +214,25 @@ enum Cmd {
         /// Never start a shell — just print the line to run. Also settable as GROVE_NO_RELOAD=1.
         #[arg(long = "no-reload")]
         no_reload: bool,
+        #[command(flatten)]
+        plain: Plain,
     },
     /// Print shell aliases from your grove file (~/.config/grove/aliases) for eval. Add `eval "$(grove init zsh)"`.
-    Init { shell: config::Shell },
+    Init {
+        shell: config::Shell,
+        #[command(flatten)]
+        plain: Plain,
+    },
     /// Print a starter grove file you can save to ~/.config/grove/aliases.
     Example,
-    /// Get or set grove's settings in ~/.config/grove/config (cache, cache_ttl, default_dir). No args lists them all.
+    /// Get or set grove's settings in ~/.config/grove/config (cache, cache_ttl, default_dir, depth). No args lists them all.
     Configure {
         /// Setting name (omit to list every setting and its value).
         key: Option<String>,
         /// New value (omit to just read the current value).
         value: Option<String>,
+        #[command(flatten)]
+        plain: Plain,
     },
     /// Print a shell completion script (bash|zsh|fish|…) for the grove suite to stdout.
     #[command(hide = true)]
@@ -183,12 +242,27 @@ enum Cmd {
     Man,
 }
 
+impl Cmd {
+    /// Flip the ui switches this verb's output flags ask for, before anything is
+    /// drawn.
+    fn apply_output(&self) {
+        match self {
+            Cmd::Overview { out, .. } | Cmd::Sync { out, .. } | Cmd::PullAll { out, .. } | Cmd::PushAll { out, .. } | Cmd::Ssh { out, .. } => out.apply(),
+            Cmd::Tree { plain, .. } | Cmd::Setup { plain, .. } | Cmd::Init { plain, .. } | Cmd::Configure { plain, .. } => plain.apply(),
+            _ => {}
+        }
+    }
+}
+
 fn main() {
     grove_core::reset_sigpipe();
     let cli = Cli::parse();
     if cli.llm {
         print!("{}", llm_guide());
         return;
+    }
+    if let Some(cmd) = &cli.cmd {
+        cmd.apply_output();
     }
     match cli.cmd {
         None => print_suite_overview(),
@@ -197,16 +271,18 @@ fn main() {
         Some(Cmd::Commit { all, push, message }) => run(grove_core::passthrough::commit(all, push, &message)),
         Some(Cmd::Pull { args }) => run(grove_core::passthrough::pull(&args)),
         Some(Cmd::Push { args }) => run(grove_core::passthrough::push(&args)),
-        Some(Cmd::Ssh { dir, yes, depth }) => run(cmd_ssh(dir, yes, depth)),
-        Some(Cmd::Overview { dir, json, force, depth }) => run(cmd_overview(dir, json, force, depth)),
-        Some(Cmd::Sync { dir, json, force, depth }) => run(cmd_sync(dir, json, force, depth)),
-        Some(Cmd::PullAll { dir, json, force, depth }) => run(cmd_pull_all(dir, json, force, depth)),
-        Some(Cmd::PushAll { dir, json, force, depth }) => run(cmd_push_all(dir, json, force, depth)),
-        Some(Cmd::Tree { dir, level, all, json }) => run(cmd_tree(dir, level, all, json)),
-        Some(Cmd::Setup { shell, force, reload, no_reload }) => run(config::setup(shell, force, config::Reload::from_flags(reload, no_reload, force))),
-        Some(Cmd::Init { shell }) => config::init(shell),
+        Some(Cmd::Ssh { dir, yes, depth, .. }) => run(cmd_ssh(dir, yes, depth)),
+        Some(Cmd::Overview { dir, json, force, depth, .. }) => run(cmd_overview(dir, json, force, depth)),
+        Some(Cmd::Sync { dir, json, force, depth, .. }) => run(cmd_sync(dir, json, force, depth)),
+        Some(Cmd::PullAll { dir, json, force, depth, .. }) => run(cmd_pull_all(dir, json, force, depth)),
+        Some(Cmd::PushAll { dir, json, force, depth, .. }) => run(cmd_push_all(dir, json, force, depth)),
+        Some(Cmd::Tree { dir, level, all, json, .. }) => run(cmd_tree(dir, level, all, json)),
+        Some(Cmd::Setup { shell, force, reload, no_reload, .. }) => {
+            run(config::setup(shell, force, config::Reload::from_flags(reload, no_reload, force)))
+        }
+        Some(Cmd::Init { shell, .. }) => config::init(shell),
         Some(Cmd::Example) => config::print_example(),
-        Some(Cmd::Configure { key, value }) => run(settings::configure(key, value)),
+        Some(Cmd::Configure { key, value, .. }) => run(settings::configure(key, value)),
         Some(Cmd::Completions { shell }) => completions::emit(shell),
         Some(Cmd::Man) => {
             let _ = clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout());
@@ -483,7 +559,7 @@ fn print_suite_overview() {
     row("grove example", "print a starter grove file");
 
     hdr("SETTINGS");
-    row("grove configure", "get/set settings: cache, cache_ttl, default_dir (no args lists them)");
+    row("grove configure", "get/set settings: cache, cache_ttl, default_dir, depth (no args lists them)");
 
     println!();
     if configured {

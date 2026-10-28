@@ -1,6 +1,6 @@
 //! The settings file: `~/.config/grove/config`, the same shell-agnostic
 //! `key = value` shape as the grove file (parsed by [`config::parse`]), so it
-//! needs no new dependency. Three knobs, all optional — a missing file (or a
+//! needs no new dependency. Four knobs, all optional — a missing file (or a
 //! missing key) just means the default:
 //!
 //! - `cache`       — per-repo fetch cache on/off (default **on**). Skips
