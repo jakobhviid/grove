@@ -5,11 +5,7 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Planned / deferred
 
-- **Completion parity for bash & fish.** The hand-written zsh completion delegates
-  the git verbs to zsh's own `_git` and offers folder completion for the
-  multi-repo verbs. bash and fish only get the clap-generated fallback, which
-  does neither. Either hand-write bash/fish equivalents or enrich the generated
-  ones.
+Nothing queued.
 
 ## Known gaps
 
@@ -20,6 +16,14 @@ notes live — not a `TODO.md`, not scattered `// TODO` comments, not the README
 
 ## Done
 
+- **Completion parity for bash & fish.** Each shell has a hand-written script:
+  the git verbs hand off to the shell's own git completion, the fleet and tree
+  verbs complete folders, and `configure`/`setup`/`init` complete their values.
+  bash, which can't complete an alias as its command, gets grove and its aliases
+  registered by `grove init bash`, which loads the script from the binary on the
+  first TAB. A test holds every script to the clap definition, so a new flag fails
+  CI until each shell offers it. Exercised on bash 3.2 and 5.2, fish 3.6 and 4.0,
+  and zsh 5.9; the installer places all three.
 - **`tree` polish.** `--git-ignore` (`-g`) leaves out what git ignores, asking
   `git check-ignore` folder by folder so nested `.gitignore`s, `info/exclude` and
   `core.excludesFile` all apply and tracked files stay. Files get a Nerd Font icon

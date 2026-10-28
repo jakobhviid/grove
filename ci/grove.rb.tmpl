@@ -40,9 +40,9 @@ class Grove < Formula
     # grove is a single binary: the git verbs (status/add/commit/pull/push) and
     # the multi-repo/tree tools (overview/sync/pull-all/push-all/tree) are all subcommands.
     bin.install "grove"
-    # `grove completions <shell>` emits the suite's completions. For zsh it's a
-    # single `_grove` file covering grove and every alias (they inherit grove's
-    # completion); bash/fish cover `grove` itself.
+    # `grove completions <shell>` emits the suite's completions: one hand-written
+    # file per shell (zsh, bash, fish) covering grove and every subcommand. The
+    # aliases complete through it — zsh and fish natively, bash via `grove init`.
     generate_completions_from_executable(bin/"grove", "completions")
     (man1/"grove.1").write Utils.safe_popen_read(bin/"grove", "man")
   end
@@ -58,7 +58,7 @@ class Grove < Formula
         grove setup            # writes ~/.config/grove/aliases + one line in your rc
       then open a new shell. (`grove init <shell>` just prints the lines to eval.)
       Rename any alias that clashes on your system (e.g. gc, or lg vs lazygit).
-      Tune behavior with `grove configure` (cache, default_dir).
+      Tune behavior with `grove configure` (cache, default_dir, depth).
 
       Run `grove` for an overview, or `grove --llm` for a machine-readable guide.
       `grove tree` and `grove overview`'s forge icons use Nerd Font glyphs —

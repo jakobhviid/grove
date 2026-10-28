@@ -148,9 +148,10 @@ every startup. Now `gs`, `gc`, `lg`, `lt`, … work.
 
 ### Manual / explicit setup
 
-`grove init <shell>` is the plain emitter — it **prints** the alias lines and
-changes nothing. It's what the `grove setup` block calls, and what to use if you
-manage your own dotfiles:
+`grove init <shell>` is the plain emitter — it **prints** the alias lines (for
+bash, followed by the two lines that hook up their completion; see *Completions*)
+and changes nothing. It's what the `grove setup` block calls, and what to use if
+you manage your own dotfiles:
 
 ```sh
 eval "$(grove init zsh)"      # zsh / bash — add to your rc yourself
@@ -219,11 +220,20 @@ echo 'command -v grove >/dev/null 2>&1 && eval "$(grove init zsh)"' >> ~/.zshrc
 
 ## Completions
 
-Homebrew and the `curl` installer place a zsh completion file (`_grove`) that
-covers `grove` and all its subcommands. The short aliases inherit grove's
-completion automatically (zsh resolves `alias lg='grove overview'` and completes
-it as `grove overview`). The git verbs delegate to zsh's own git completion, so
-`grove status`/`gs` complete exactly like `git status`.
+Homebrew and the `curl` installer place a completion file for zsh (`_grove`),
+bash and fish, each covering `grove` and all its subcommands the same way: the git
+verbs delegate to the shell's own git completion, so `grove status`/`gs` complete
+exactly like `git status`; the multi-repo and tree verbs complete a folder; and
+`configure`, `setup` and `init` complete their values. `grove completions <shell>`
+prints any of them.
+
+The short aliases complete as the command they stand for. zsh resolves `alias
+lg='grove overview'` and completes it as `grove overview`; fish's `alias` wraps
+the command it names. bash does neither, so the bash shell code from `grove init
+bash` (which the `grove setup` rc line runs) registers grove and every alias that
+runs it, loading the completion script from the binary on the first TAB. A
+hand-written `alias` line in `.bashrc` that never passes through `grove init`
+completes as file names.
 
 ## Everyday workflows
 

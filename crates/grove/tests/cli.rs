@@ -774,3 +774,102 @@ fn quiet_drops_the_notes_on_stderr() {
         .stderr(predicate::str::is_empty())
         .stdout(predicate::str::contains("No git repositories"));
 }
+
+/// Run `script` in bash with grove's completion and the short aliases loaded the
+/// way a user's shell has them (`eval "$(grove init bash)"`), plus `try LINE`,
+/// which completes LINE as bash would with the cursor at its end and prints what
+/// was offered, one per line.
+fn bash_completing(home: &std::path::Path, cwd: &std::path::Path, script: &str) -> String {
+    let grove_bin = assert_cmd::cargo::cargo_bin("grove");
+    let bin_dir = grove_bin.parent().unwrap();
+    let harness = r#"
+eval "$(grove init bash)"
+try() {
+  local line=$1 spec func
+  local -a w
+  COMP_LINE=$line; COMP_POINT=${#line}
+  read -r -a w <<<"$line"
+  case $line in *' ') w+=("") ;; esac
+  COMP_WORDS=("${w[@]}"); COMP_CWORD=$(( ${#w[@]} - 1 )); COMPREPLY=()
+  spec=$(complete -p "${w[0]}") || return 1
+  func=${spec##*-F }; func=${func%% *}
+  "$func" "${w[0]}" "${w[COMP_CWORD]}" "${w[COMP_CWORD-1]}"
+  printf '%s\n' "${COMPREPLY[@]}"
+}
+"#;
+    let out = std::process::Command::new("bash")
+        .arg("--norc")
+        .arg("-c")
+        .arg(format!("{harness}\n{script}"))
+        .current_dir(cwd)
+        .env("PATH", format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default()))
+        .env("XDG_CONFIG_HOME", home)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("bash runs");
+    assert!(out.status.success(), "bash failed: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn bash_completes_subcommands_flags_and_folders() {
+    let home = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    fs::create_dir(cwd.path().join("src")).unwrap();
+    assert_eq!(bash_completing(home.path(), cwd.path(), "try 'grove ov'"), "overview \n");
+    assert!(bash_completing(home.path(), cwd.path(), "try 'grove tree --'").contains("--git-ignore \n"));
+    // bash 4+ marks a folder itself (compopt); on bash 3.2 the script adds the slash.
+    assert_eq!(bash_completing(home.path(), cwd.path(), "try 'grove overview sr'").replace("src/", "src"), "src\n");
+    assert_eq!(bash_completing(home.path(), cwd.path(), "try 'grove configure cache '"), "on \noff \n");
+}
+
+#[test]
+fn bash_completes_a_short_alias_as_the_command_it_stands_for() {
+    // bash won't do this on its own; `grove init bash` registers the aliases, and the
+    // completion script loads from the binary on the first TAB.
+    let home = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    fs::create_dir(cwd.path().join("src")).unwrap();
+    let got = bash_completing(home.path(), cwd.path(), "alias lg='grove overview'\nalias lgpp='grove push-all'\ntry 'lg sr'\ntry 'lgpp --fo'");
+    assert_eq!(got.replace("src/", "src"), "src\n--force \n");
+}
+
+#[test]
+fn bash_hands_the_git_verbs_to_gits_own_completion_as_a_git_line() {
+    // Stand in for git's completion and record what it was handed: the same line,
+    // with `git` where `grove` (or the alias) was, and the cursor moved with it.
+    let home = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    let got = bash_completing(
+        home.path(),
+        cwd.path(),
+        "__git_wrap__git_main() { COMPREPLY=(\"$COMP_LINE|$COMP_POINT|${COMP_WORDS[*]}|$COMP_CWORD\"); }\nalias gs='grove status'\ntry 'grove status --sh'\ntry 'gs --sh'",
+    );
+    assert_eq!(got, "git status --sh|15|git status --sh|2\ngit status --sh|15|git status --sh|2\n");
+}
+
+#[test]
+fn fish_completes_subcommands_and_folders_when_fish_is_installed() {
+    let Ok(probe) = std::process::Command::new("fish").arg("--version").output() else {
+        eprintln!("fish not installed — skipping");
+        return;
+    };
+    assert!(probe.status.success());
+    let home = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    fs::create_dir(cwd.path().join("src")).unwrap();
+    let script = grove(home.path()).args(["completions", "fish"]).output().unwrap().stdout;
+    let file = home.path().join("grove.fish");
+    fs::write(&file, script).unwrap();
+    let out = std::process::Command::new("fish")
+        .arg("--no-config")
+        .arg("-c")
+        .arg(format!(
+            "source {}; alias lg 'grove overview'; for l in 'grove ov' 'grove tree --git-i' 'lg sr'; complete -C $l | string replace -r '\\t.*' ''; end",
+            file.display()
+        ))
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "overview\n--git-ignore\nsrc/\n", "stderr: {}", String::from_utf8_lossy(&out.stderr));
+}

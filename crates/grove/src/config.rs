@@ -215,6 +215,28 @@ fn alias_line(shell: Shell, name: &str, cmd: &str) -> String {
     }
 }
 
+/// The shell code `init` (and `eval "$(grove setup)"`) hands the shell: one alias
+/// line per entry in the grove file, then — for bash, which doesn't complete an
+/// alias as the command it stands for — the hookup that completes `grove` and
+/// every alias that runs it (see `completions::BASH_ALIASES`).
+fn shell_code(shell: Shell) -> Vec<String> {
+    let items = aliases();
+    let mut code: Vec<String> = items.iter().map(|(n, c)| alias_line(shell, n, c)).collect();
+    if let Shell::Bash = shell {
+        let names: Vec<&str> = std::iter::once("grove")
+            .chain(items.iter().filter(|(n, c)| c.split_whitespace().next() == Some("grove") && is_word(n)).map(|(n, _)| n.as_str()))
+            .collect();
+        code.push(crate::completions::BASH_ALIASES.replace("@NAMES@", &names.join(" ")));
+    }
+    code
+}
+
+/// A name `complete` can register as-is — the grove file is hand-edited, and an
+/// odd name must not turn the completion line into something else.
+fn is_word(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
+}
+
 fn activate_hint(shell: Shell) -> String {
     match shell {
         Shell::Fish => "grove init fish | source".to_string(),
@@ -224,13 +246,12 @@ fn activate_hint(shell: Shell) -> String {
 
 pub fn init(shell: Shell) {
     let items = aliases();
-    let lines: Vec<String> = items.iter().map(|(n, c)| alias_line(shell, n, c)).collect();
 
     // Being eval'd / piped / redirected (not a TTY): emit ONLY shell code, and
     // nothing else — this runs on every shell startup, so it must stay silent
     // and pure. This is the path `eval "$(grove init zsh)"` takes.
     if !io::stdout().is_terminal() {
-        for l in &lines {
+        for l in shell_code(shell) {
             println!("{l}");
         }
         return;
@@ -453,8 +474,8 @@ fn activate(shell: Shell, mode: Reload, changed: bool, rc: &Path) {
         // stdout is a pipe: emit what `grove init` would, so `eval "$(grove setup)"`
         // provisions *and* activates in one step. Piped-but-not-eval'd (a redirect
         // to a file) is harmless — the lines just land there.
-        for (name, cmd) in aliases() {
-            println!("{}", alias_line(shell, &name, &cmd));
+        for l in shell_code(shell) {
+            println!("{l}");
         }
         say(&paint("90", "Alias lines written to stdout — run via `eval \"$(grove setup)\"` and they are live in this shell now."));
         return;

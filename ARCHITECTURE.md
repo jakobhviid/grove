@@ -18,7 +18,7 @@ grove/
       src/config.rs              # the grove file + `grove setup`/`init` (shell aliases)
       src/settings.rs            # the settings file + `grove configure` (cache, default_dir, depth)
       src/cache.rs               # fetch-freshness stamps under ~/.cache/grove
-      src/completions.rs         # shell completions + man, from the one clap definition
+      src/completions.rs         # hand-written zsh/bash/fish completions (tested against clap) + man
     grove-core/                  # all the multi-repo/git logic, as typed functions
       src/lib.rs                 # crate doc + module index + reset_sigpipe
       src/git.rs                 # discover repos, read state by shelling out to git

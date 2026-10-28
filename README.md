@@ -225,8 +225,8 @@ what `grove init` would) and moves its report to stderr, so it stays readable
 while the shell code stays clean.
 
 Prefer to manage your own dotfiles entirely? `grove init <shell>` just **prints**
-the alias lines and changes nothing — the block `grove setup` writes simply calls
-it:
+the alias lines (for bash, plus the two lines that let the aliases tab-complete)
+and changes nothing — the block `grove setup` writes simply calls it:
 
 ```sh
 eval "$(grove init zsh)"       # zsh / bash
@@ -322,12 +322,17 @@ co  = grove commit          # your own shortcuts, too
 
 ## Completions
 
-Homebrew and the `curl` installer place a zsh completion file (`_grove`) covering
-`grove` and all its subcommands. The short aliases inherit grove's completion
-automatically (zsh resolves `alias lg='grove overview'` and completes it as
-`grove overview`), and the git verbs delegate to zsh's own git completion — so
-`grove status` (and `gs`) tab-complete exactly like `git status`. bash/fish get
-clap-generated completions for `grove`.
+Homebrew and the `curl` installer place completions for **zsh, bash and fish**,
+each covering `grove` and all its subcommands: the git verbs delegate to the
+shell's own git completion — so `grove status` (and `gs`) tab-complete exactly
+like `git status` — the multi-repo and tree verbs complete a folder, and
+`configure`/`setup`/`init` complete their values.
+
+The short aliases complete as the command they stand for: zsh resolves `alias
+lg='grove overview'` on its own, and fish's `alias` wraps the command it names.
+bash can't, so the bash code `grove init bash` emits (which the `grove setup` rc
+line runs) registers grove and its aliases, loading the completion script from the
+binary on the first TAB — it works even without an installed completion file.
 
 ## For scripts & agents
 

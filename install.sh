@@ -50,14 +50,25 @@ done
 
 echo "Installed:${installed}"
 
-# Best-effort zsh completions: grove emits a single _grove file (covering grove
-# and lg/lgs/lgp/lgpp/lt) that we drop in a data dir. We can't edit the user's shell
-# config here, so we print the one line that puts it on fpath.
-COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions"
+# Best-effort completions, one file per shell, each dropped where that shell (or
+# bash-completion) looks for a user's own. zsh's folder has to be on fpath, and we
+# can't edit the user's shell config here, so we print the one line that adds it.
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+COMP_DIR="$DATA_DIR/zsh/site-functions"
 if mkdir -p "$COMP_DIR" 2>/dev/null && "$BIN_DIR/grove" completions zsh > "$COMP_DIR/_grove" 2>/dev/null; then
     echo "zsh completions: ${COMP_DIR}/_grove"
     echo "  to enable, add before \`compinit\` in ~/.zshrc:"
     echo "      fpath=(${COMP_DIR} \$fpath)"
+fi
+BASH_COMP_DIR="${BASH_COMPLETION_USER_DIR:-$DATA_DIR/bash-completion}/completions"
+if command -v bash >/dev/null 2>&1 && mkdir -p "$BASH_COMP_DIR" 2>/dev/null \
+    && "$BIN_DIR/grove" completions bash > "$BASH_COMP_DIR/grove" 2>/dev/null; then
+    echo "bash completions: ${BASH_COMP_DIR}/grove (loaded by bash-completion)"
+fi
+FISH_COMP_DIR="$DATA_DIR/fish/vendor_completions.d"
+if command -v fish >/dev/null 2>&1 && mkdir -p "$FISH_COMP_DIR" 2>/dev/null \
+    && "$BIN_DIR/grove" completions fish > "$FISH_COMP_DIR/grove.fish" 2>/dev/null; then
+    echo "fish completions: ${FISH_COMP_DIR}/grove.fish"
 fi
 
 case ":$PATH:" in
