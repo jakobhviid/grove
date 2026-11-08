@@ -1,0 +1,48 @@
+# grove
+
+> grove puts your git shortcuts in one portable binary for zsh, bash and fish on macOS and Linux, with a dashboard, sync, pull-all and push-all across a folder of repos.
+
+Your git shortcuts as one portable binary, plus an overview and sync for a whole folder of repos. The complete reference, for people and LLMs, is built into the tool: run `grove --llm`.
+grove is one of the software projects by Jakob Hviid, all listed at https://jakob.hviid.phd/software/ (for LLMs: https://jakob.hviid.phd/llms.txt).
+
+## What it does
+
+- **The everyday git verbs**: `gs ga gc gcp gp gpp` for status, add, commit, commit-and-push, pull and push. Each one hands straight over to git, so flags, colour, pager and exit codes are git's own.
+- **A dashboard across repos**: `lg` lists every repo in a folder with its branch, ahead and behind, and dirty counts, a clickable name and a link to its forge page.
+- **Sync in one step**: `lgs` fast-forwards the repos that are behind and pushes the ones that are ahead, touching only clean ones. `lgp` and `lgpp` pull or push all.
+- **Made for scripts and agents**: The data commands take `--json` and report what they could not touch, and `grove --llm` prints the whole guide for an AI agent.
+
+## Install
+
+Homebrew, on macOS and Linux. Pours a prebuilt binary, so no compiler is needed. The tap is trusted once first, as Homebrew 6 and later ask.
+
+```sh
+brew trust --tap jakobhviid/tap
+brew install jakobhviid/tap/grove
+```
+
+Or one line, without Homebrew. No compiler and no root: installs to `~/.local/bin`. Suited to servers, containers and immutable distros.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jakobhviid/grove/main/install.sh | sh
+```
+
+Then add the short names to your shell, once. Writes the alias file and one line in your shell's startup file. Run it again at any time; it never adds a second line.
+
+```sh
+grove setup
+```
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/jakobhviid/grove/main/README.md): every command, the aliases and the `--json` output
+- [WORKFLOWS.md](https://raw.githubusercontent.com/jakobhviid/grove/main/WORKFLOWS.md): everyday workflows
+- [ARCHITECTURE.md](https://raw.githubusercontent.com/jakobhviid/grove/main/ARCHITECTURE.md): how it is built
+
+## Optional
+
+- [Project page](https://jakob.hviid.phd/grove/): the page this file accompanies
+- [Source](https://github.com/jakobhviid/grove): MIT licensed
+- [Releases](https://github.com/jakobhviid/grove/releases)
+- [All software by Jakob Hviid](https://jakob.hviid.phd/software/)
+- [Jakob Hviid's site, for LLMs](https://jakob.hviid.phd/llms.txt)
