@@ -1,3 +1,5 @@
+<img src="site/icon.svg" alt="" width="96" align="right">
+
 # grove
 
 Your git shortcuts as **one portable binary** — install once, get the same

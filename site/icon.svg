@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- grove's icon: a git-graph tree with a smaller one beside it. The navy tile is shared by every tool's icon; the canonical copy of
+       each icon is site/icon.svg in its repository (jakobhviid.github.io/_software-template/README.md). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d3a5f"/><stop offset="1" stop-color="#002642"/></linearGradient>
+
+  </defs>
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#tile)"/>
+  <rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+<path d="M52.0 110.0 L52.0 35.9" stroke="#f3efe4" stroke-width="6.6" stroke-linecap="round"/>
+  <path d="M52.0 87.2 C52.0 73.9 27.3 75.8 27.3 60.6 L27.3 49.2" fill="none" stroke="#f3efe4" stroke-width="5.7" stroke-linecap="round"/>
+  <path d="M52.0 73.9 C52.0 60.6 76.7 64.4 76.7 49.2 L76.7 41.6" fill="none" stroke="#f3efe4" stroke-width="5.7" stroke-linecap="round"/><circle cx="52.0" cy="35.9" r="8.5" fill="#7fd18b"/><circle cx="27.3" cy="45.4" r="8.5" fill="#7fd18b"/><circle cx="76.7" cy="37.8" r="8.5" fill="#7fd18b"/><circle cx="52.0" cy="56.8" r="5.7" fill="#f3efe4"/><circle cx="52.0" cy="98.6" r="5.7" fill="#f3efe4"/><path d="M100.0 110.0 L100.0 67.1" stroke="#f3efe4" stroke-width="3.9" stroke-linecap="round"/>
+  <path d="M100.0 96.8 C100.0 89.1 85.7 90.2 85.7 81.4 L85.7 74.8" fill="none" stroke="#f3efe4" stroke-width="3.3" stroke-linecap="round"/>
+  <path d="M100.0 89.1 C100.0 81.4 114.3 83.6 114.3 74.8 L114.3 70.4" fill="none" stroke="#f3efe4" stroke-width="3.3" stroke-linecap="round"/><circle cx="100.0" cy="67.1" r="5.0" fill="#7fd18b"/><circle cx="85.7" cy="72.6" r="5.0" fill="#7fd18b"/><circle cx="114.3" cy="68.2" r="5.0" fill="#7fd18b"/><circle cx="100.0" cy="79.2" r="3.3" fill="#f3efe4"/><circle cx="100.0" cy="103.4" r="3.3" fill="#f3efe4"/>
+</svg>
