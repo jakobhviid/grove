@@ -22,6 +22,7 @@ once.
 compiler/build tools are needed:
 
 ```sh
+brew trust --tap jakobhviid/tap   # once: Homebrew 6 and later load a third-party tap only when trusted
 brew install jakobhviid/tap/grove
 ```
 
